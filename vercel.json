@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/cron/absent-check", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/daily-summary", "schedule": "0 13 * * *" }
+  ]
+}
