@@ -6,6 +6,7 @@ import { useMe } from '@/components/Shell';
 import { Badge, Skeleton } from '@/components/ui';
 import CameraCapture from '@/components/CameraCapture';
 import { label12, minutesText } from '@/lib/hours';
+import { quoteOfTheDay } from '@/lib/quotes';
 
 // Phone GPS improves over the first seconds. Watch for up to `ms`, keep the most accurate fix,
 // and stop early once a fix is good enough.
@@ -90,8 +91,6 @@ function AttendanceCard({ data, reload }) {
         <div className="row">
           {t.record?.status === 'VOIDED' ? <Badge tone="bad">Voided</Badge> : t.checkedIn ? <Badge tone="ok">Checked in</Badge> : <Badge tone="warn">Not checked in</Badge>}
           {t.flags?.late && <Badge tone="warn">Late {minutesText(t.flags.lateMinutes)}</Badge>}
-          <button className="btn primary" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3)} onClick={() => act('check-in')}>Check in</button>
-          <button className="btn" disabled={busy || !t.checkedIn} onClick={() => act('check-out')}>Check out</button>
         </div>
       </div>
       {t.needsReason && !t.checkedIn && (
@@ -100,6 +99,10 @@ function AttendanceCard({ data, reload }) {
           <textarea rows={2} style={{ marginTop: 8 }} placeholder="Reason (e.g. client visit, lunch, personal work)" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       )}
+      <div className="att-actions">
+        <button className="btn primary big" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3)} onClick={() => act('check-in')}>{busy && !t.checkedIn ? 'Please wait…' : 'Check in'}</button>
+        <button className="btn big" disabled={busy || !t.checkedIn} onClick={() => act('check-out')}>{busy && t.checkedIn ? 'Please wait…' : 'Check out'}</button>
+      </div>
       {away && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>You appear to be leaving the office. Stay within range or you will be checked out.</div>}
       {msg && <div className={`alert ${msg.ok ? 'ok' : ''}`} style={{ marginTop: 12 }}>{msg.text}</div>}
       {t.record?.sessions?.length > 0 && (
@@ -296,16 +299,21 @@ export default function Dashboard() {
   if (!d) return <Skeleton />;
   const isAdmin = me.role === 'ADMIN';
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+  const quote = quoteOfTheDay(d.today.date);
 
   return (
     <>
       <div className="row between" style={{ marginBottom: 18 }}>
         <div>
-          <h1>{greeting()}, {me.name.split(' ')[0]}</h1>
+          <h1>{greeting()}, {me.name.split(' ')[0]} 👋</h1>
           <div className="muted">{ROLE_NAME[me.role]} · {today}</div>
         </div>
         {me.role !== 'EMPLOYEE' && <QuickActions me={me} />}
       </div>
+      <figure className="quote">
+        <blockquote>{quote.text}</blockquote>
+        <figcaption>{quote.author}</figcaption>
+      </figure>
       {!isAdmin && <AttendanceCard data={d} reload={load} />}
       {d.overview && <Overview me={me} d={d} />}
       {isAdmin && <Checklist items={d.checklist} />}
