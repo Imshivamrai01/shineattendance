@@ -41,7 +41,7 @@ export default function CameraCapture({ title, onDone, onCancel }) {
   return (
     <Modal title={title} onClose={cancel}>
       {err && <div className="alert">{err}</div>}
-      <div style={{ borderRadius: 12, overflow: 'hidden', background: '#000', aspectRatio: '4 / 3', position: 'relative' }}>
+      <div className="cam-frame">
         <video ref={video} playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', display: shot ? 'none' : 'block' }} />
         {shot && <img src={shot} alt="Captured" style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />}
         {!ready && !err && !shot && <div className="skel" style={{ position: 'absolute', inset: 0, borderRadius: 0 }} />}

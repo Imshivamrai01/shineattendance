@@ -54,7 +54,9 @@ h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -.02em; } h2 { font-size:
   .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; border-radius: 12px; cursor: pointer; text-decoration: none; }
   .tab:hover { text-decoration: none; }
   .tab.on { color: var(--brand); }
-  .tab.on svg { background: var(--brand-soft); border-radius: 10px; padding: 3px; box-sizing: content-box; }
+  .tab svg { padding: 4px 14px; box-sizing: content-box; border-radius: 12px; transition: background .15s; }
+  .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab.on svg { background: var(--brand-soft); }
   .install { bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
   .modal { max-height: 88vh; border-radius: 18px; }
   .card { padding: 16px; }
@@ -99,8 +101,8 @@ tbody tr { transition: background .12s; } tbody tr:hover { background: var(--bg)
 .alert { padding: 11px 14px; border-radius: 10px; margin-bottom: 14px; background: var(--bad-bg); color: var(--bad); }
 .alert.ok { background: var(--ok-bg); color: var(--ok); } .alert.warn { background: var(--warn-bg); color: var(--warn); }
 .empty { text-align: center; padding: 44px 16px; color: var(--muted); } .empty p { margin: 0 0 16px; font-size: 16px; }
-.overlay { position: fixed; inset: 0; background: rgba(10, 14, 25, .55); backdrop-filter: blur(3px); display: grid; place-items: center; padding: 16px; z-index: 50; animation: fade .15s ease both; }
-.modal { background: var(--card); border-radius: 16px; padding: 24px; width: 100%; max-width: 520px; max-height: 90vh; overflow: auto; box-shadow: 0 20px 60px rgba(0, 0, 0, .3); animation: pop .18s ease both; }
+.overlay { position: fixed; inset: 0; background: rgba(10, 14, 25, .55); backdrop-filter: blur(3px); display: grid; place-items: center; padding: 16px; z-index: 100; animation: fade .15s ease both; }
+.modal { background: var(--card); border-radius: 16px; padding: 24px; width: 100%; max-width: 520px; max-height: 90vh; max-height: 90dvh; overflow: auto; box-shadow: 0 20px 60px rgba(0, 0, 0, .3); animation: pop .18s ease both; }
 @keyframes pop { from { opacity: 0; transform: scale(.97) translateY(8px); } to { opacity: 1; transform: none; } }
 .bar { height: 9px; background: var(--line); border-radius: 99px; overflow: hidden; } .bar i { display: block; height: 100%; background: var(--grad); border-radius: 99px; transition: width .4s; }
 .check { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; } .check:last-child { border: 0; }
@@ -171,3 +173,24 @@ pre.diff { margin: 0; font: 12px/1.45 ui-monospace, Consolas, monospace; white-s
 /* result messages stay visible while scrolling (the page is long, especially on phones) */
 .alert.toast { position: sticky; top: 8px; z-index: 30; box-shadow: 0 6px 20px rgba(20,26,42,.15); }
 @media (max-width: 800px) { .alert.toast { top: 64px; } }
+
+/* Camera preview */
+.cam-frame { border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; position: relative; }
+.splash { min-height: 100dvh; }
+
+/* Phone layout fixes: popups, form actions, filter rows, attendance card */
+@media (max-width: 800px) {
+  .modal { max-height: 92dvh; }
+  /* Save / Cancel / Capture buttons stay visible at the bottom of the popup while its content scrolls */
+  .modal > .row:last-child, .modal form > .row:last-child { position: sticky; bottom: 0; background: var(--card); padding: 12px 0 2px; margin-top: 8px !important; border-top: 1px solid var(--line); z-index: 1; }
+  .modal > .row:last-child .btn, .modal form > .row:last-child .btn { flex: 1 1 0; justify-content: center; }
+  .cam-frame { aspect-ratio: 1 / 1; max-height: 46dvh; width: 100%; margin-inline: auto; }
+  /* filter rows: every control on its own full-width line, date pairs side by side */
+  .card.row > div { flex: 1 1 140px; min-width: 0; }
+  .card.row > input, .card.row > select { flex: 1 1 100%; }
+  /* cards whose header has buttons (check in / check out): buttons share the line */
+  .card > .row.between > .row { width: 100%; }
+  .card > .row.between > .row .btn:not(.sm) { flex: 1 1 0; justify-content: center; }
+  .row.between { gap: 10px; }
+  .install { width: calc(100vw - 20px); flex-wrap: wrap; }
+}
