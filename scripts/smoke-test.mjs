@@ -179,6 +179,14 @@ try {
   ok(await admin.call('POST', '/api/departments', { name: 'INTERN - WEB DEVELOPER', parent: intern._id }));
   assert.equal(ok(await admin.call('GET', '/api/departments')).items.find((d) => d.name === 'INTERN - WEB DEVELOPER').parentName, 'INTERN'); t('sub-department under INTERN');
 
+  // Nobody assigned above an HR: the request goes to the COO (then Admin), not straight to Admin
+  const hr8 = ok(await admin.call('POST', '/api/users', { role: 'HR', employeeId: 'HR-888', name: 'HR Without Manager', password: 'Handover#Pass1' }));
+  const hr8c = new Client(); ok(await hr8c.call('POST', '/api/auth/login', { identifier: 'HR-888', password: 'Handover#Pass1' }));
+  ok(await hr8c.call('POST', '/api/auth/change-password', { currentPassword: 'Handover#Pass1', newPassword: 'Handover#Pass2' }));
+  const hreq8 = ok(await hr8c.call('POST', '/api/requests', { type: 'PROFILE_CHANGE', changes: { city: 'Agra' }, reason: 'Moved to Agra' })).item;
+  assert.equal(hreq8.status, 'PENDING_COO');
+  ok(await cooC.call('POST', `/api/requests/${hreq8._id}`, { decision: 'approve' })); t('HR with no manager: request goes to the COO and applies on approval');
+
   // Employee may report to the COO; Admin can change a person's role (Admin-only)
   const e4 = ok(await admin.call('POST', '/api/users', { role: 'EMPLOYEE', employeeId: 'E-400', name: 'Reports To COO', manager: coo.user._id }));
   assert.equal(e4.user.manager._id ?? e4.user.manager, coo.user._id); t('employee can be assigned to a COO');

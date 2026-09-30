@@ -8,14 +8,22 @@ import { EMPLOYEE_REQUESTABLE, PROFILE_FIELDS } from './constants.js';
 
 const activeUser = (id) => (id ? M.User.findOne({ _id: id, status: 'ACTIVE' }).lean() : null);
 
-async function firstStage(requester, subject, from) {
-  // EMPLOYEE -> HR -> MANAGER -> apply; HR -> MANAGER -> apply. Missing/inactive stages are skipped;
-  // with nobody left the request waits for Admin.
-  if (from === 'COO') return 'PENDING_ADMIN'; // COO -> Admin
-  if (from === 'MANAGER') return (await M.User.exists({ role: 'COO', status: 'ACTIVE' })) ? 'PENDING_COO' : 'PENDING_ADMIN'; // Manager -> COO -> Admin
-  if (from === 'EMPLOYEE' && (await activeUser(subject.hr))) return 'PENDING_HR';
+const cooExists = () => M.User.exists({ role: 'COO', status: 'ACTIVE' });
+
+// The next person up the chain for someone: their Manager (or COO, if that is who they report to); if they have
+// nobody assigned, the COO; if there is no COO either, the Admin.
+async function upperStage(subject) {
   if (await activeUser(subject.manager)) return 'PENDING_MANAGER';
-  return 'PENDING_ADMIN';
+  return (await cooExists()) ? 'PENDING_COO' : 'PENDING_ADMIN';
+}
+
+async function firstStage(requester, subject, from) {
+  // EMPLOYEE -> HR -> Manager/COO -> apply; HR -> Manager/COO -> apply; MANAGER -> COO -> apply; COO -> Admin -> apply.
+  // Stages with nobody assigned are skipped; Admin can override any stage.
+  if (from === 'COO') return 'PENDING_ADMIN'; // COO -> Admin
+  if (from === 'MANAGER') return (await cooExists()) ? 'PENDING_COO' : 'PENDING_ADMIN'; // Manager -> COO -> Admin
+  if (from === 'EMPLOYEE' && (await activeUser(subject.hr))) return 'PENDING_HR';
+  return upperStage(subject);
 }
 
 export async function createRequest(ctx, { type, subjectId, changes, payload, reason }) {
@@ -91,7 +99,7 @@ export async function reviewRequest(ctx, id, { decision, note }) {
   if (decision === 'reject') {
     r.status = 'REJECTED';
   } else if (actor.role === 'HR' && r.status === 'PENDING_HR') {
-    r.status = (await activeUser(subject.manager)) ? 'PENDING_MANAGER' : 'PENDING_ADMIN';
+    r.status = await upperStage(subject);
   } else {
     await apply(ctx, r, actor, override, note);
     r.status = 'APPROVED';

@@ -1,17 +1,13 @@
 'use client';
 import { use, useCallback, useEffect, useState } from 'react';
-import { api, fmtDateTime, show } from '@/lib/client';
+import Link from 'next/link';
+import { api, fmtDateTime, show, takeFlash } from '@/lib/client';
 import { useMe } from '@/components/Shell';
 import { Badge, ConfirmModal, TempPassword, statusTone, Skeleton } from '@/components/ui';
-import ProfileEditor from '@/components/ProfileEditor';
 import AttendanceHistory from '@/components/AttendanceHistory';
 
 const ALL = ['name', 'email', 'mobile', 'fatherName', 'motherName', 'dob', 'address', 'city', 'state', 'pincode', 'emergencyContact1', 'emergencyContact2',
   'designation', 'joiningDate', 'employeeType', 'department', 'manager', 'hr', 'location', 'employeeId'];
-const MANAGER = ['designation', 'department', 'location', 'hr', 'employeeType', 'joiningDate'];
-const COO = [...MANAGER, 'manager'];
-const PROFILE = ALL.slice(0, 12);
-const ADMIN_EDIT = ['role', ...ALL];
 const LABELS = { role: 'Role', name: 'Name', email: 'Email', mobile: 'Mobile', fatherName: "Father's name", motherName: "Mother's name", dob: 'Date of birth', address: 'Address',
   city: 'City', state: 'State', pincode: 'PIN code', emergencyContact1: 'Emergency contact 1', emergencyContact2: 'Emergency contact 2', designation: 'Designation',
   joiningDate: 'Joining date', employeeType: 'Employee type', department: 'Department', manager: 'Manager', hr: 'HR', location: 'Location', employeeId: 'Employee ID' };
@@ -34,6 +30,7 @@ export default function UserDetail({ params }) {
   const [temp, setTemp] = useState(null);
   const load = useCallback(() => api(`/users/${id}`).then(setD).catch((e) => setErr(e.message)), [id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { const m = takeFlash(); if (m) setNote(m); }, []);
 
   if (err) return <div className="alert">{err}</div>;
   if (!d) return <Skeleton />;
@@ -54,9 +51,9 @@ export default function UserDetail({ params }) {
           <div className="muted">{u.role}{u.employeeId ? ` · ${u.employeeId}` : ''}</div>
         </div>
         <div className="row">
-          {isAdmin && <button className="btn" onClick={() => setModal({ kind: 'edit', mode: 'direct', fields: ADMIN_EDIT })}>Edit</button>}
-          {canManagerEdit && <button className="btn" onClick={() => setModal({ kind: 'edit', mode: 'direct', fields: me.role === 'COO' ? COO : MANAGER })}>Edit assignment</button>}
-          {canHrRequest && <button className="btn" onClick={() => setModal({ kind: 'edit', mode: 'request', fields: PROFILE })}>{me.role === 'MANAGER' ? 'Request profile change (to COO)' : me.role === 'COO' ? 'Request profile change (to Admin)' : 'Request profile change'}</button>}
+          {isAdmin && <Link className="btn primary" href={`/users/${id}/edit`}>Edit</Link>}
+          {canManagerEdit && <Link className="btn primary" href={`/users/${id}/edit?mode=direct`}>Edit assignment</Link>}
+          {canHrRequest && <Link className="btn" href={`/users/${id}/edit?mode=request`}>{me.role === 'MANAGER' ? 'Request profile change (to COO)' : me.role === 'COO' ? 'Request profile change (to Admin)' : 'Request profile change'}</Link>}
           {isAdmin && u.role !== 'ADMIN' && (u.status === 'ACTIVE'
             ? <button className="btn" onClick={() => setStatus('INACTIVE')}>Deactivate</button>
             : <button className="btn" onClick={() => setStatus('ACTIVE')}>Reactivate</button>)}
@@ -98,7 +95,6 @@ export default function UserDetail({ params }) {
         )}
       </div>
 
-      {modal?.kind === 'edit' && <ProfileEditor user={u} fields={modal.fields} mode={modal.mode} onClose={() => setModal(null)} onDone={done} />}
       {modal?.kind === 'status' && (
         <ConfirmModal title={modal.status === 'ACTIVE' ? 'Reactivate account' : 'Deactivate account'} confirmLabel={modal.status === 'ACTIVE' ? 'Reactivate' : 'Deactivate'}
           details={[['Name', u.name], ['Employee ID', u.employeeId || '—'], ['Record type', u.role]]}

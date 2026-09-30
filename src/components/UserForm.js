@@ -26,7 +26,7 @@ export function Contact({ label, value, onChange }) {
   const set = (k) => (e) => onChange({ ...value, [k]: e.target.value });
   return (
     <>
-      <Field label={`${label} name`}><input value={value.name || ''} onChange={set('name')} /></Field>
+      <Field label={label ? `${label} name` : 'Name'}><input value={value.name || ''} onChange={set('name')} /></Field>
       <Field label="Relationship"><input value={value.relationship || ''} onChange={set('relationship')} /></Field>
       <Field label="Mobile"><input value={value.mobile || ''} onChange={set('mobile')} inputMode="tel" /></Field>
     </>

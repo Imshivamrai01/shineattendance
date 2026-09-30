@@ -12,7 +12,7 @@ const OFFICE = {
   address: 'https://maps.app.goo.gl/8wxUr2r714z7GFPu7',
   latitude: 26.7294757,
   longitude: 83.3835677,
-  radiusMeters: 5,          // must be within 5 m to check in
+  radiusMeters: 15,         // must be within 15 m to check in
   checkoutRadiusMeters: 20, // beyond 20 m => automatic check-out
 };
 

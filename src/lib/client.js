@@ -28,3 +28,7 @@ export const toLocalInput = (d) => {
   const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset());
   return x.toISOString().slice(0, 16);
 };
+
+// One-shot message shown on the next page (used after saving on a separate page).
+export const setFlash = (msg) => { try { sessionStorage.setItem('flash', msg); } catch { /* private mode */ } };
+export const takeFlash = () => { try { const m = sessionStorage.getItem('flash'); sessionStorage.removeItem('flash'); return m || ''; } catch { return ''; } };
