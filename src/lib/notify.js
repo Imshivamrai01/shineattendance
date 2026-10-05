@@ -29,6 +29,23 @@ function queue(label, fn) {
   defer(run);
 }
 
+// ---------- in-app notifications (bell) ----------
+/** Show a notification in the app to one person or several. `to` = user id(s); empty ids are ignored. */
+export function note(to, { title, body, link }) {
+  defer(async () => {
+    try {
+      const ids = [...new Set([].concat(to || []).filter(Boolean).map(String))];
+      if (ids.length) await M.Notification.insertMany(ids.map((user) => ({ user, title, body, link })));
+    } catch (e) { console.error('In-app notification failed:', e.message); }
+  });
+}
+const idsOf = (q) => M.User.find({ status: 'ACTIVE', ...q }).distinct('_id');
+/** Admin + COO accounts, minus whoever did the action. */
+async function leaderIds(except = []) {
+  const skip = new Set([].concat(except).filter(Boolean).map(String));
+  return (await idsOf({ role: { $in: ['ADMIN', 'COO'] } })).filter((id) => !skip.has(String(id)));
+}
+
 // ---------- recipients ----------
 const clean = (list) => [...new Set(list.flat().filter(Boolean).map((e) => String(e).trim().toLowerCase()))];
 const activeEmails = (q) => M.User.find({ status: 'ACTIVE', email: { $ne: null }, ...q }).distinct('email');
@@ -36,6 +53,7 @@ const activeEmails = (q) => M.User.find({ status: 'ACTIVE', email: { $ne: null }
 export async function adminRecipients() {
   const s = await getSettings();
   if (s.notificationEmail) return [s.notificationEmail];
+  if (process.env.REPORT_EMAIL) return [process.env.REPORT_EMAIL]; // the Admin login email is often a placeholder that bounces
   return activeEmails({ role: 'ADMIN' });
 }
 /** Admin + COO. `except` = the person who did the action (they don't need to be told about their own action). */
@@ -65,6 +83,10 @@ const ROLE = { ADMIN: 'Admin', COO: 'COO', MANAGER: 'Manager', HR: 'HR', EMPLOYE
 
 // ---------- 1. New account / password reset (to that person) ----------
 export function notifyWelcome({ userId, password, kind = 'created' }) {
+  if (kind === 'created') {
+    note(userId, { title: 'Welcome to Shine Infosolutions!', link: '/profile',
+      body: 'We are glad to have you on the team. Complete your profile, add your photo, and check in from the office each day. Your daily tasks appear under Tasks.' });
+  }
   queue('welcome', async () => {
     const u = await M.User.findById(userId).select('name email employeeId role mobile').lean();
     if (!u?.email) return;
@@ -108,6 +130,8 @@ export function notifyCheckin({ userId, recId, at, distance }) {
 }
 
 export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = false, distance }) {
+  if (auto) note(userId, { title: 'You were checked out automatically', body: `You moved ${distance ?? 'away'} m from the office at ${fmtTime(at)}. To check in again you will need to give a reason.`, link: '/' });
+  else if (endOfDay) note(userId, { title: 'Checked out at office closing', body: `Office hours are over, so you were checked out at ${fmtTime(at)}.`, link: '/attendance' });
   queue('check-out', async () => {
     const [u, rec, cfg] = await Promise.all([M.User.findById(userId).select('name email employeeId').lean(), M.Attendance.findById(recId).lean(), getSettings()]);
     if (!u || !rec) return;
@@ -141,6 +165,10 @@ export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = fal
 
 /** Someone came back after leaving the premises and gave a reason (to Admin + COO). */
 export function notifyReentry({ userId, reason, at }) {
+  defer(async () => {
+    const u = await M.User.findById(userId).select('name').lean();
+    if (u) note(await leaderIds(userId), { title: `${u.name} came back to the office`, body: `Checked in again at ${fmtTime(at)}. Reason: ${reason}`, link: `/users/${userId}` });
+  });
   queue('re-entry', async () => {
     const u = await M.User.findById(userId).select('name employeeId').lean();
     if (!u) return;
@@ -154,6 +182,12 @@ export function notifyReentry({ userId, reason, at }) {
 
 /** Attendance corrected or voided: tell the employee and Admin + COO (not the person who did it). */
 export function notifyAttendanceChange({ kind, recId, actor, reason, oldData, newData }) {
+  defer(async () => {
+    const rec = await M.Attendance.findById(recId).select('user date').lean();
+    if (rec && String(rec.user) !== String(actor?._id)) {
+      note(rec.user, { title: `Your attendance for ${dayLabel(rec.date)} was ${kind === 'voided' ? 'voided' : 'corrected'}`, body: `By ${actor?.name || 'an administrator'}. Reason: ${reason}`, link: '/attendance' });
+    }
+  });
   queue(`attendance ${kind}`, async () => {
     const rec = await M.Attendance.findById(recId).populate('user', 'name email employeeId').lean();
     if (!rec?.user) return;
@@ -174,6 +208,13 @@ const changeRows = (changes) => Object.entries(changes || {}).map(([k, v]) => [L
 
 /** A request is now waiting on someone: tell that approver. */
 export function notifyPending(reqId) {
+  defer(async () => {
+    const r = await M.ChangeRequest.findById(reqId).populate('requester', 'name').populate('subject', 'name hr manager').lean();
+    if (!r || !STAGE[r.status]) return;
+    const to = r.status === 'PENDING_HR' ? [r.subject.hr] : r.status === 'PENDING_MANAGER' ? [r.subject.manager]
+      : await idsOf({ role: r.status === 'PENDING_COO' ? 'COO' : 'ADMIN' });
+    note(to, { title: `Approval needed: ${TYPE[r.type]}`, body: `${r.requester.name} submitted a ${TYPE[r.type]} for ${r.subject.name}.`, link: '/requests' });
+  });
   queue('approval request', async () => {
     const r = await M.ChangeRequest.findById(reqId).populate('requester', 'name role').populate('subject', 'name employeeId hr manager').lean();
     if (!r || !STAGE[r.status]) return;
@@ -192,6 +233,14 @@ export function notifyPending(reqId) {
 
 /** Approved or rejected: Admin + COO (the requester and employee see the outcome in the app). */
 export function notifyDecision(reqId) {
+  defer(async () => {
+    const r = await M.ChangeRequest.findById(reqId).select('type status requester subject history').lean();
+    if (!r || !['APPROVED', 'REJECTED'].includes(r.status)) return;
+    const last = r.history.at(-1);
+    const word = r.status === 'APPROVED' ? 'approved' : 'rejected';
+    note([r.requester, r.subject], { title: `Your ${TYPE[r.type]} request was ${word}`,
+      body: `${word[0].toUpperCase()}${word.slice(1)} by ${ROLE[last?.byRole] || 'a reviewer'}${last?.note ? `: ${last.note}` : '.'}`, link: r.type === 'PROFILE_CHANGE' ? '/profile' : '/attendance' });
+  });
   queue('request decision', async () => {
     const r = await M.ChangeRequest.findById(reqId).populate('requester', 'name email role').populate('subject', 'name email employeeId').lean();
     if (!r || !['APPROVED', 'REJECTED'].includes(r.status)) return;
@@ -209,6 +258,9 @@ export function notifyDecision(reqId) {
 
 /** Details changed directly (Admin/COO/Manager edit): tell Admin + COO. `fields` = [[field, old, new]] */
 export function notifyProfileChanged({ userId, actor, fields, reason }) {
+  if (fields?.length && String(userId) !== String(actor?._id) && !fields.every(([k]) => k === 'status')) {
+    note(userId, { title: 'Your details were updated', body: `${actor?.name || 'An administrator'} changed: ${fields.map(([k]) => LBL[k] || k).join(', ')}.`, link: '/profile' });
+  }
   queue('profile changed', async () => {
     const u = await M.User.findById(userId).select('name email employeeId role').lean();
     if (!u || !fields?.length) return;
@@ -223,6 +275,10 @@ export function notifyProfileChanged({ userId, actor, fields, reason }) {
 
 // ---------- 4. Security ----------
 export function notifyLockout({ userId, ip }) {
+  defer(async () => {
+    const u = await M.User.findById(userId).select('name').lean();
+    if (u) note(await idsOf({ role: 'ADMIN' }), { title: `Account locked: ${u.name}`, body: '5 wrong password attempts. Locked for 15 minutes.', link: `/users/${userId}` });
+  });
   queue('account lock', async () => {
     const u = await M.User.findById(userId).select('name email employeeId role').lean();
     if (!u) return;

@@ -7,6 +7,7 @@ import Icon from '@/components/Icon';
 import Logo from '@/components/Logo';
 import LocationGuard from '@/components/LocationGuard';
 import Avatar from '@/components/Avatar';
+import Notifications from '@/components/Notifications';
 
 const Ctx = createContext(null);
 export const useMe = () => useContext(Ctx);
@@ -48,6 +49,15 @@ export default function Shell({ children }) {
     }).catch((e) => { if (e.status !== 401) window.location.href = '/login'; });
   }, [router]);
   useEffect(() => setOpen(false), [path]);
+  // One bell only (it polls): in the top bar on phones, in the sidebar on wide screens.
+  const [phone, setPhone] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 800px)');
+    const on = () => setPhone(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
 
   // On phones tables turn into stacked cards: copy each column header onto its cells as a label.
   useEffect(() => {
@@ -80,11 +90,11 @@ export default function Shell({ children }) {
     <Ctx.Provider value={me}>
       <div className="top">
         <div className="brand" style={{ padding: 0 }}><Logo size={32} /> Shine Attendance</div>
-        <span className="top-user">{me.name.split(" ")[0]}</span>
+        <span className="top-right"><span className="top-user">{me.name.split(' ')[0]}</span>{phone && <Notifications />}</span>
       </div>
       <div className="shell">
         <aside className={`side ${open ? 'open' : ''}`}>
-          <div className="brand"><Logo size={32} /> Shine Attendance</div>
+          <div className="brand"><Logo size={32} /> Shine Attendance{!phone && <span className="side-bell"><Notifications /></span>}</div>
           <nav>
             {items.map((n) => (
               <Link key={n.href} href={n.href} className={`nav ${active === n.href ? 'on' : ''}`}><Icon name={n.icon} /> {n.label}</Link>

@@ -13,6 +13,7 @@ import '../models/Session.js';
 import '../models/Setting.js';
 import '../models/Counter.js';
 import '../models/Task.js';
+import '../models/Notification.js';
 
 const g = globalThis;
 g.__mongo ||= { conn: null, promise: null };
@@ -117,6 +118,7 @@ export const M = {
   get Setting() { return model('Setting'); },
   get Counter() { return model('Counter'); },
   get Task() { return model('Task'); },
+  get Notification() { return model('Notification'); },
 };
 
 export async function getSettings() {

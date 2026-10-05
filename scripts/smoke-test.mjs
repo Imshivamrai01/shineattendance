@@ -278,6 +278,19 @@ try {
   assert.equal((await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'x' })).status, 400);
   assert.equal((await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Past task', date: '2020-01-01' })).status, 400);
   assert.equal((await pe.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Self task' })).status, 403); t('HR assigns daily tasks; employees cannot');
+  // Bell: welcome on onboarding + task assigned; reading clears them
+  await wait(800);
+  const bell = ok(await pe.call('GET', '/api/notifications'));
+  assert.ok(bell.items.some((n) => /Welcome to Shine Infosolutions/.test(n.title)), 'welcome notification');
+  assert.ok(bell.items.some((n) => /New task assigned/.test(n.title)), 'task notification');
+  ok(await pe.call('POST', '/api/notifications', { id: bell.items[0]._id }));
+  assert.equal(ok(await pe.call('GET', '/api/notifications')).count, bell.count - 1);
+  ok(await pe.call('POST', '/api/notifications', { all: true }));
+  assert.equal(ok(await pe.call('GET', '/api/notifications')).count, 0);
+  assert.equal(ok(await hrC.call('GET', '/api/notifications')).items.some((n) => /New task assigned/.test(n.title)), false); t('notification bell: welcome + task for the employee only; read clears');
+  // A person added today has no attendance history before today ("no data", not "absent")
+  const h0 = ok(await pe.call('GET', `/api/users/${pv.user._id}/attendance`));
+  assert.equal(h0.months.length, 1); assert.equal(h0.start, h0.today); assert.ok(h0.days.filter((x) => x.date < h0.today).every((x) => x.status === 'BEFORE_START')); t('history starts on the onboarding day');
   const mine = ok(await pe.call('GET', '/api/tasks?mine=1'));
   assert.equal(mine.tasks.length, 2); assert.equal(mine.canAssign, false); assert.equal(mine.people, undefined); t('employee sees own tasks');
   assert.equal((await pe.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE' })).status, 403);

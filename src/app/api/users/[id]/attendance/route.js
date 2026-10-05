@@ -6,8 +6,6 @@ import { dateKey } from '@/lib/dates';
 import { hoursWorked } from '@/lib/attendance';
 import { photoUrl } from '@/lib/cloudinary';
 
-const valid = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d));
-
 // Month view of one person's attendance. Access follows the same visibility rules as the profile itself.
 export const GET = handler(async ({ req, user, params }) => {
   const id = oid(params.id);
@@ -16,8 +14,8 @@ export const GET = handler(async ({ req, user, params }) => {
   const month = new URL(req.url).searchParams.get('month') || today.slice(0, 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw bad('month must be YYYY-MM');
 
-  const created = dateKey(u.createdAt);
-  const start = valid(u.joiningDate) && u.joiningDate < created ? u.joiningDate : created; // earliest known day
+  // Attendance only exists from the day the person was added to this app; earlier days are "no data", never "absent".
+  const start = dateKey(u.createdAt);
   const [y, m] = month.split('-').map(Number);
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const recs = await M.Attendance.find({ user: id, date: { $gte: `${month}-01`, $lte: `${month}-${String(last).padStart(2, '0')}` } }).lean();

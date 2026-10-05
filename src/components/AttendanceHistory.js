@@ -42,6 +42,8 @@ export default function AttendanceHistory({ userId }) {
   if (err) return <div className="alert">{err}</div>;
   if (!data) return <div className="card"><Skeleton rows={4} /></div>;
   const s = data.summary;
+  // Days that can have data: not in the future and not before the person was added to the app. Newest first.
+  const shown = data.days.filter((x) => (x.status !== 'FUTURE' && x.status !== 'BEFORE_START') || x.sessions.length).reverse();
   const selected = data.days.find((x) => x.date === day) || data.days.find((x) => x.date === data.today) || data.days[0];
   const pickDay = (d) => { setDay(d); setMode('daily'); };
   const onDate = (d) => { if (!d) return; setDay(d); if (d.slice(0, 7) !== data.month) setMonth(d.slice(0, 7)); };
@@ -64,7 +66,7 @@ export default function AttendanceHistory({ userId }) {
           )}
         </div>
       </div>
-      <p className="muted small" style={{ marginTop: 0 }}>Records since {dayLabel(data.start)}. Office hours {label12(data.office.start)} to {label12(data.office.end)}{data.office.grace ? ` (+${data.office.grace} min grace)` : ''}. Sunday is the weekly off.</p>
+      <p className="muted small" style={{ marginTop: 0 }}>Records start on {dayLabel(data.start)} (the day this account was added). Office hours {label12(data.office.start)} to {label12(data.office.end)}{data.office.grace ? ` (+${data.office.grace} min grace)` : ''}. Sunday is the weekly off.</p>
 
       {mode === 'monthly' ? (
         <>
@@ -75,9 +77,10 @@ export default function AttendanceHistory({ userId }) {
             <div className="stat"><span className="muted">Total hours</span><b>{s.totalHours}</b></div>
             <div className="stat"><span className="muted">Avg / day</span><b>{s.avgHours}</b></div>
           </div>
-          <div className="scroll"><table className="days">
+          {!shown.length && <p className="muted" style={{ textAlign: 'center', padding: '18px 0' }}>No data found.</p>}
+          <div className="scroll" hidden={!shown.length}><table className="days">
             <thead><tr><th>Date</th><th>Status</th><th>Sessions</th><th>Hours</th></tr></thead>
-            <tbody>{data.days.filter((x) => x.status !== 'FUTURE' && x.status !== 'BEFORE_START' || x.sessions.length).reverse().map((x) => ( // newest day first
+            <tbody>{shown.map((x) => (
               <tr key={x.date} style={{ cursor: 'pointer', opacity: x.status === 'WEEK_OFF' ? 0.6 : 1 }} onClick={() => pickDay(x.date)}>
                 <td style={{ whiteSpace: 'nowrap' }}>{x.date.slice(8)} {WD[x.weekday]}</td>
                 <td><Badge tone={TONE[x.status]}>{LABEL[x.status]}</Badge>{x.flags?.late && <> <Badge tone="warn">Late {minutesText(x.flags.lateMinutes)}</Badge></>}{x.flags?.early && <> <Badge tone="warn">Left early</Badge></>}</td>
@@ -93,7 +96,7 @@ export default function AttendanceHistory({ userId }) {
             <span className="row" style={{ gap: 6 }}><Badge tone={TONE[selected.status]}>{LABEL[selected.status]}</Badge>{selected.flags?.late && <Badge tone="warn">Late {minutesText(selected.flags.lateMinutes)}</Badge>}{selected.flags?.early && <Badge tone="warn">Left {minutesText(selected.flags.earlyMinutes)} early</Badge>}</span>
           </div>
           {selected.voidReason && <div className="alert warn">Voided: {selected.voidReason}</div>}
-          {selected.sessions.length === 0 ? <p className="muted">No attendance recorded on this day.</p> : selected.sessions.map((x, i) => (
+          {selected.sessions.length === 0 ? <p className="muted">{selected.status === 'BEFORE_START' ? 'No data found.' : 'No attendance recorded on this day.'}</p> : selected.sessions.map((x, i) => (
             <div key={x._id} className="card" style={{ marginBottom: 10, boxShadow: 'none' }}>
               <div className="row between"><b>Session {i + 1}</b><span className="muted small">{!x.checkOut && 'Still checked in'}</span></div>
               <div className="sess-pair">
