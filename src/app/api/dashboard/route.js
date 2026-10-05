@@ -5,7 +5,7 @@ import { completion, scopeFilter } from '@/lib/users';
 import { photosEnabled, photoUrl } from '@/lib/cloudinary';
 import { hoursWorked } from '@/lib/attendance';
 import { canActOn } from '@/lib/workflow';
-import { dayFlags, hoursCfg } from '@/lib/hours';
+import { afterHours, dayFlags, hoursCfg } from '@/lib/hours';
 
 const PENDING = ['PENDING_HR', 'PENDING_MANAGER', 'PENDING_COO', 'PENDING_ADMIN'];
 
@@ -95,6 +95,9 @@ export const GET = handler(async ({ user }) => {
 
   const cfgSettings = await getSettings();
   out.office = hoursCfg(cfgSettings);
+  // Once office hours are over, "not checked in" becomes "absent" (Sunday is the weekly off).
+  out.today.closed = afterHours(cfgSettings);
+  out.today.weekOff = new Date(`${today}T00:00:00Z`).getUTCDay() === 0;
   if (mine) out.today.flags = dayFlags(mine, cfgSettings);
   if (user.role !== 'EMPLOYEE') out.overview = await overview(user, today, cfgSettings);
 

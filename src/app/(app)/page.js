@@ -29,6 +29,15 @@ function getPosition({ ms = 12000, goodEnough = 5, onUpdate } = {}) {
   });
 }
 
+// Today's status. After office hours: someone who came shows "Checked out", someone who never came shows "Absent".
+function dayStatus(t) {
+  if (t.record?.status === 'VOIDED') return <Badge tone="bad">Voided</Badge>;
+  if (t.checkedIn) return <Badge tone="ok">Checked in</Badge>;
+  if (t.record?.sessions?.length) return <Badge>Checked out</Badge>;
+  if (t.weekOff) return <Badge>Week off</Badge>;
+  return t.closed ? <Badge tone="bad">Absent</Badge> : <Badge tone="warn">Not checked in</Badge>;
+}
+
 function AttendanceCard({ data, reload }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -87,7 +96,7 @@ function AttendanceCard({ data, reload }) {
           </div>
         </div>
         <div className="row">
-          {t.record?.status === 'VOIDED' ? <Badge tone="bad">Voided</Badge> : t.checkedIn ? <Badge tone="ok">Checked in</Badge> : <Badge tone="warn">Not checked in</Badge>}
+          {dayStatus(t)}
           {t.flags?.late && <Badge tone="warn">Late {minutesText(t.flags.lateMinutes)}</Badge>}
         </div>
       </div>
@@ -212,7 +221,7 @@ function Overview({ me, d }) {
         ) : <Stat label="People I oversee" value={c.team} href="/users" />}
         <Stat label="Present today" value={c.presentToday} tone="ok" href="/attendance" />
         <Stat label="In office now" value={c.checkedInNow} />
-        <Stat label="Not in yet" value={c.absentToday} tone={c.absentToday ? 'warn' : undefined} />
+        <Stat label={d.today.closed ? 'Absent today' : 'Not in yet'} value={c.absentToday} tone={c.absentToday ? (d.today.closed ? 'bad' : 'warn') : undefined} />
         <Stat label={admin ? 'Pending requests' : 'Waiting for me'} value={c.pendingRequests} tone={c.pendingRequests ? 'warn' : undefined} href="/requests" />
       </div>
 
@@ -221,14 +230,14 @@ function Overview({ me, d }) {
           <div className="row between"><h2>Today's attendance</h2><Link className="small" href="/attendance">View all</Link></div>
           {o.present.length === 0 ? <p className="muted">Nobody has checked in yet today.</p> : o.present.map((p) => (
             <Person key={p.id} name={p.name} photo={p.photo} sub={`${p.employeeId || ''} · in ${fmtTime(p.checkIn)}${p.checkOut ? ` · out ${fmtTime(p.checkOut)}` : ''}`}
-              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Left</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
+              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Checked out</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
           ))}
         </div>
         <div className="card">
-          <div className="row between"><h2>Not checked in yet</h2><span className="muted small">{c.absentToday} total</span></div>
+          <div className="row between"><h2>{d.today.closed ? 'Absent today' : 'Not checked in yet'}</h2><span className="muted small">{c.absentToday} total</span></div>
           {o.absent.length === 0 ? <p className="muted">{c.team ? 'Everyone has checked in.' : 'No one to show yet.'}</p> : o.absent.map((p) => (
             <Person key={p.id} name={p.name} sub={`${p.employeeId || ''}${p.department ? ` · ${p.department}` : ''}`}
-              right={<Link className="small" href={`/users/${p.id}`}>Open</Link>} />
+              right={<>{d.today.closed && <Badge tone="bad">Absent</Badge>}<Link className="small" href={`/users/${p.id}`}>Open</Link></>} />
           ))}
           {c.absentToday > o.absent.length && <p className="muted small" style={{ marginBottom: 0 }}>+ {c.absentToday - o.absent.length} more</p>}
         </div>
