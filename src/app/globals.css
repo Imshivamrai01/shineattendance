@@ -324,3 +324,74 @@ table.days .unit { display: none; }
   .sess-pair > div { min-width: 0; }
   .sess-photo { width: 100%; height: auto; aspect-ratio: 4 / 3; }
 }
+
+/* Attendance list: one card per person per day */
+.att-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.att-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); min-width: 0; }
+.att-card.voided { opacity: .65; }
+.att-head { display: flex; align-items: center; gap: 12px; }
+.att-who { flex: 1; min-width: 0; }
+.att-name { display: block; font: inherit; font-weight: 700; font-size: 15px; color: var(--text); background: none; border: 0; padding: 0; text-align: left; overflow-wrap: anywhere; }
+button.att-name { color: var(--brand); cursor: pointer; }
+.att-hours { text-align: right; flex: none; line-height: 1.2; }
+.att-hours b { display: block; font-size: 16px; }
+.att-tags { gap: 6px; margin-top: 10px; }
+.att-sessions { margin-top: 10px; border-top: 1px solid var(--line); }
+.att-session { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.att-session:last-child { border-bottom: 0; padding-bottom: 2px; }
+.att-times { flex: 1; min-width: 0; font-size: 14px; }
+.att-flags { gap: 4px 6px; margin-top: 2px; }
+.att-flags:empty { display: none; }
+.att-session .thumb { flex: none; }
+.att-actions-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); justify-content: flex-end; }
+.att-person { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.att-person-info { flex: 1; min-width: 0; }
+.att-person-info b { font-size: 16px; overflow-wrap: anywhere; }
+.att-person-actions { display: flex; gap: 6px; }
+@media (max-width: 800px) {
+  .att-list { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .att-card { padding: 12px 14px; }
+  .att-person-actions { width: 100%; }
+  .att-person-actions .btn { flex: 1 1 0; justify-content: center; }
+}
+
+/* Compact day rows (dashboard "My last 7 days") */
+.daylist { display: grid; gap: 8px; }
+.dayrow { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.daybox { width: 44px; height: 44px; border-radius: 12px; background: var(--brand-soft); color: var(--brand-d); display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; flex: none; }
+.daybox b { font-size: 16px; } .daybox span { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.dayrow-main { flex: 1; min-width: 0; }
+.dayrow-times { font-weight: 600; font-size: 14.5px; }
+.dayrow-end { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
+
+/* Phones: every remaining table becomes a tidy card per row: a title line, then "label ......... value" lines */
+@media (max-width: 800px) {
+  table.stack tr { display: block; padding: 12px 14px; }
+  table.stack td { display: block; overflow: hidden; padding: 5px 0; text-align: right; }
+  table.stack td::before { float: left; max-width: 42%; margin: 0 12px 0 0; text-align: left; font-size: 12px; line-height: 1.9; text-transform: none; letter-spacing: 0; font-weight: 500; }
+  table.stack td:first-child { display: block; text-align: left; font-weight: 700; font-size: 15px; padding: 0 0 8px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  table.stack td:first-child::before { display: none; }
+  table.stack td:empty { display: none; }
+  table.stack td[data-label=""] { padding-top: 8px; }
+  table.stack td[data-label=""] .btn { margin-left: 6px; }
+  /* day-by-day attendance keeps its own one-line layout */
+  table.stack.days tr { display: grid; }
+  table.stack.days td { display: block; overflow: visible; text-align: left; border: 0; margin: 0; font-size: inherit; }
+  table.stack.days td:nth-child(1) { padding: 0; font-weight: 600; }
+  table.stack.days td:nth-child(2) { display: flex; justify-content: flex-start; }
+  table.stack.days td:nth-child(3) { border-top: 1px dashed var(--line); padding-top: 8px; }
+  table.stack.days td:nth-child(4) { text-align: right; }
+  table.stack.days td.none { display: none; }
+
+  /* App-like sizing */
+  .card { padding: 16px; margin-bottom: 12px; border-radius: 16px; }
+  h2 { font-size: 16px; margin-bottom: 10px; }
+  .grid { gap: 10px; }
+  .stat { padding: 12px 14px; }
+  .stat b { font-size: 24px; }
+  .btn { border-radius: 12px; }
+  label { font-size: 12.5px; }
+  .tabs .btn { flex: 1 1 0; justify-content: center; }
+  .dayrow { padding: 9px 10px; gap: 10px; }
+}
+@media (max-width: 800px) { table.stack td pre.diff { display: inline-block; max-width: 100%; margin: 0; text-align: left; vertical-align: top; } }

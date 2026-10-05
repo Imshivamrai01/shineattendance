@@ -16,5 +16,5 @@ export async function queryAttendance(user, sp) {
   } else q.user = { $in: visible };
   if (sp.get('status')) q.status = sp.get('status');
   return M.Attendance.find(q).sort({ date: -1 }).limit(2000)
-    .populate('user', 'name employeeId department role').populate('location', 'name').lean();
+    .populate('user', 'name employeeId department role designation photo').populate('location', 'name').lean();
 }

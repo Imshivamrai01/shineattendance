@@ -4,10 +4,13 @@ import Link from 'next/link';
 import { api, fmtTime, toLocalInput } from '@/lib/client';
 import { minutesText } from '@/lib/hours';
 import { useMe } from '@/components/Shell';
-import { Badge, ConfirmModal, Empty, Field, Modal, statusTone, Skeleton } from '@/components/ui';
+import { Badge, ConfirmModal, Empty, Field, Modal, Skeleton } from '@/components/ui';
+import Avatar from '@/components/Avatar';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const ago = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const dayLabel = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' });
+const hoursText = (h) => (h ? `${Math.floor(h)}h ${String(Math.round((h % 1) * 60)).padStart(2, '0')}m` : '—');
 
 function CorrectionModal({ rec, session, onClose, onDone, mode }) {
   const [ci, setCi] = useState(toLocalInput(session?.checkIn));
@@ -58,6 +61,12 @@ export default function Attendance() {
   const load = useCallback(() => api(`/attendance?${qs}`).then((d) => setItems(d.items)).catch((e) => setErr(e.message)), [qs]);
   useEffect(() => { load(); }, [load]);
   const done = (m) => { setModal(null); if (m) setNote(m); load(); };
+  const staff = me.role !== 'EMPLOYEE';
+  // Tapping a name shows that person's attendance for this month.
+  const showPerson = (id) => { setRole(''); setPerson(id); setFrom(today().slice(0, 8) + '01'); setTo(today()); window.scrollTo({ top: 0 }); };
+  const selected = person ? (items?.find((r) => r.user?._id === person)?.user || people.find((p) => p._id === person)) : null;
+  const active = (items || []).filter((r) => r.status === 'ACTIVE');
+  const totals = { days: active.length, hours: Math.round(active.reduce((a, r) => a + r.hours, 0) * 100) / 100, late: active.filter((r) => r.flags?.late).length };
   const direct = ['ADMIN', 'COO', 'MANAGER'].includes(me.role);
   const canReq = me.role === 'EMPLOYEE' || me.role === 'HR';
   const exportCsv = async () => {
@@ -89,35 +98,68 @@ export default function Attendance() {
       </div>
       {err && <div className="alert">{err}</div>}
       {note && <div className="alert ok">{note}</div>}
-      <div className="card scroll">
-        {!items ? <Skeleton /> : items.length === 0 ? <Empty message="No attendance records in this period." /> : (
-          <table>
-            <thead><tr><th>Date</th><th>Employee</th><th>Sessions</th><th>Hours</th><th>Status</th><th /></tr></thead>
-            <tbody>{items.map((r) => (
-              <tr key={r._id} style={r.status === 'VOIDED' ? { opacity: 0.65 } : undefined}>
-                <td>{r.date}</td>
-                <td>{me.role !== 'EMPLOYEE' ? <Link href={`/users/${r.user?._id}`}>{r.user?.name}</Link> : r.user?.name}<div className="muted small">{r.user?.employeeId}</div></td>
-                <td>{r.sessions.map((s) => (
-                  <div key={s._id} className="row" style={{ gap: 6 }}>
-                    {s.inPhotoUrl && <a href={s.inPhotoUrl} target="_blank" rel="noreferrer" title="Check-in photo"><img className="thumb" src={s.inPhotoUrl} alt="Check-in" /></a>}
-                    <span>{fmtTime(s.checkIn)} – {fmtTime(s.checkOut)}</span>
+      {selected && (
+        <div className="card att-person">
+          <Avatar user={selected} size={52} />
+          <div className="att-person-info">
+            <b>{selected.name}</b>
+            <div className="muted small">{[selected.employeeId, selected.designation || selected.role].filter(Boolean).join(' · ')}</div>
+            <div className="muted small">{totals.days} day{totals.days === 1 ? '' : 's'} · {hoursText(totals.hours)}{totals.late ? ` · ${totals.late} late` : ''}</div>
+          </div>
+          <div className="att-person-actions">
+            <Link className="btn sm" href={`/users/${selected._id}`}>Profile</Link>
+            <button className="btn sm" onClick={() => setPerson('')}>Everyone</button>
+          </div>
+        </div>
+      )}
+      {!items ? <div className="card"><Skeleton /></div> : items.length === 0 ? <div className="card"><Empty message="No attendance records in this period." /></div> : (
+        <div className="att-list">
+          {items.map((r) => (
+            <div key={r._id} className={`att-card ${r.status === 'VOIDED' ? 'voided' : ''}`}>
+              <div className="att-head">
+                <Avatar user={r.user} size={42} />
+                <div className="att-who">
+                  {staff && !person
+                    ? <button type="button" className="att-name" onClick={() => showPerson(r.user?._id)}>{r.user?.name}</button>
+                    : <span className="att-name">{r.user?.name}</span>}
+                  <div className="muted small">{dayLabel(r.date)}{r.user?.employeeId ? ` · ${r.user.employeeId}` : ''}</div>
+                </div>
+                <div className="att-hours"><b>{hoursText(r.hours)}</b><span className="muted small">{r.sessions.some((x) => !x.checkOut) ? 'so far' : 'worked'}</span></div>
+              </div>
+              <div className="row att-tags">
+                {r.status === 'VOIDED' ? <Badge tone="bad">Voided</Badge> : <Badge tone="ok">Present</Badge>}
+                {r.flags?.late && <Badge tone="warn">Late {minutesText(r.flags.lateMinutes)}</Badge>}
+                {r.flags?.early && <Badge tone="warn">Left early</Badge>}
+                {r.location?.name && <span className="muted small">{r.location.name}</span>}
+              </div>
+              {r.voidReason && <div className="muted small" style={{ marginTop: 6 }}>Reason: {r.voidReason}</div>}
+              <div className="att-sessions">
+                {r.sessions.map((s) => (
+                  <div key={s._id} className="att-session">
+                    {s.inPhotoUrl ? <a href={s.inPhotoUrl} target="_blank" rel="noreferrer" title="Check-in photo"><img className="thumb" src={s.inPhotoUrl} alt="Check-in" /></a> : null}
+                    <div className="att-times">
+                      <div><b>{fmtTime(s.checkIn)}</b> <span className="muted">→</span> <b>{s.checkOut ? fmtTime(s.checkOut) : 'in office'}</b></div>
+                      <div className="row att-flags">
+                        {s.corrected && <Badge tone="warn">corrected</Badge>}
+                        {s.autoCheckout && <Badge tone="warn">left office</Badge>}
+                        {s.endOfDay && <Badge>office closed</Badge>}
+                        {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
+                        {s.reentryReason && <span className="muted small">Back: {s.reentryReason}</span>}
+                      </div>
+                    </div>
                     {s.outPhotoUrl && <a href={s.outPhotoUrl} target="_blank" rel="noreferrer" title="Check-out photo"><img className="thumb" src={s.outPhotoUrl} alt="Check-out" /></a>}
-                    {s.corrected && <Badge tone="warn">corrected</Badge>}
-                    {s.autoCheckout && <Badge tone="warn">auto check-out</Badge>}
-                    {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
                     {r.status === 'ACTIVE' && (direct || canReq) && (
                       <button className="btn sm" onClick={() => setModal({ kind: 'fix', rec: r, session: s })}>{direct ? 'Correct' : 'Request fix'}</button>)}
-                  </div>))}</td>
-                <td>{r.hours}</td>
-                <td><Badge tone={statusTone(r.status)}>{r.status}</Badge>{r.flags?.late && <> <Badge tone="warn">Late {minutesText(r.flags.lateMinutes)}</Badge></>}{r.flags?.early && <> <Badge tone="warn">Left early</Badge></>}{r.voidReason && <div className="muted small">{r.voidReason}</div>}</td>
-                <td>
-                  {r.status === 'ACTIVE' && direct && <button className="btn sm" onClick={() => setModal({ kind: 'add', rec: r })}>+ Session</button>}{' '}
-                  {r.status === 'ACTIVE' && me.role === 'ADMIN' && <button className="btn sm danger" onClick={() => setModal({ kind: 'void', rec: r })}>Void</button>}
-                </td>
-              </tr>))}</tbody>
-          </table>
-        )}
-      </div>
+                  </div>))}
+              </div>
+              {r.status === 'ACTIVE' && (direct || me.role === 'ADMIN') && (
+                <div className="row att-actions-row">
+                  {direct && <button className="btn sm" onClick={() => setModal({ kind: 'add', rec: r })}>+ Add session</button>}
+                  {me.role === 'ADMIN' && <button className="btn sm danger" onClick={() => setModal({ kind: 'void', rec: r })}>Void</button>}
+                </div>)}
+            </div>))}
+        </div>
+      )}
       {(modal?.kind === 'fix' || modal?.kind === 'add') && (
         <CorrectionModal rec={modal.rec} session={modal.session} mode={direct ? 'direct' : 'request'} onClose={() => setModal(null)} onDone={done} />)}
       {modal?.kind === 'void' && (

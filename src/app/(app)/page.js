@@ -293,14 +293,25 @@ function Recent({ items }) {
   if (!items?.length) return null;
   return (
     <div className="card scroll">
-      <h2>My last 7 days</h2>
-      <table>
-        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th></tr></thead>
-        <tbody>{items.map((r) => (
-          <tr key={r.date}><td>{r.date}</td><td>{fmtTime(r.in)}</td><td>{fmtTime(r.out)}</td><td>{r.hours}</td>
-            <td><Badge tone={r.status === 'VOIDED' ? 'bad' : 'ok'}>{r.status === 'VOIDED' ? 'Voided' : 'Present'}</Badge></td></tr>
-        ))}</tbody>
-      </table>
+      <div className="row between"><h2>My last 7 days</h2><Link className="small" href="/profile">Full history</Link></div>
+      <div className="daylist">
+        {items.map((r) => {
+          const d = new Date(`${r.date}T00:00:00`);
+          return (
+            <div key={r.date} className="dayrow">
+              <div className="daybox"><b>{r.date.slice(8)}</b><span>{d.toLocaleDateString('en-IN', { weekday: 'short' })}</span></div>
+              <div className="dayrow-main">
+                <div className="dayrow-times">{fmtTime(r.in)} <span className="muted">→</span> {r.out ? fmtTime(r.out) : 'in office'}</div>
+                <div className="muted small">{d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}</div>
+              </div>
+              <div className="dayrow-end">
+                <b>{r.hours ? `${r.hours} h` : '—'}</b>
+                <Badge tone={r.status === 'VOIDED' ? 'bad' : 'ok'}>{r.status === 'VOIDED' ? 'Voided' : 'Present'}</Badge>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
