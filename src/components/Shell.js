@@ -5,6 +5,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { api } from '@/lib/client';
 import Icon from '@/components/Icon';
 import Logo from '@/components/Logo';
+import LocationGuard from '@/components/LocationGuard';
+import Avatar from '@/components/Avatar';
 
 const Ctx = createContext(null);
 export const useMe = () => useContext(Ctx);
@@ -12,6 +14,7 @@ export const useMe = () => useContext(Ctx);
 const NAV = [
   { href: '/', label: 'Dashboard', icon: 'home' },
   { href: '/attendance', label: 'Attendance', icon: 'clock' },
+  { href: '/tasks', label: 'Tasks', icon: 'tasks' },
   { href: '/requests', label: 'Requests', icon: 'inbox' },
   { href: '/users', label: 'People', icon: 'users', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
   { href: '/departments', label: 'Departments', icon: 'building', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
@@ -69,10 +72,9 @@ export default function Shell({ children }) {
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
   const logout = async () => { await api('/auth/logout', { method: 'POST' }); router.replace('/login'); };
   const primary = me.role === 'EMPLOYEE'
-    ? ['/', '/attendance', '/requests', '/profile']
-    : ['/', '/attendance', '/requests', '/users'];
+    ? ['/', '/attendance', '/tasks', '/requests', '/profile']
+    : ['/', '/attendance', '/tasks', '/users'];
   const bottom = items.filter((n) => primary.includes(n.href));
-  const initials = me.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 
   return (
     <Ctx.Provider value={me}>
@@ -89,7 +91,7 @@ export default function Shell({ children }) {
             ))}
           </nav>
           <div className="who">
-            <span className="avatar">{initials}</span>
+            <Avatar user={me} size={36} />
             <div style={{ minWidth: 0 }}>
               <div className="name">{me.name}</div>
               <div className="muted small">{me.role}</div>
@@ -99,6 +101,7 @@ export default function Shell({ children }) {
         </aside>
         <main className="main fade">{children}</main>
       </div>
+      {me.role !== 'ADMIN' && <LocationGuard />}
       {open && <div className="scrim" onClick={() => setOpen(false)} />}
       <nav className="bottom" aria-label="Main">
         {bottom.map((n) => (

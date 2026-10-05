@@ -26,9 +26,11 @@ ADMIN > MANAGER > HR > EMPLOYEE. Nothing is seeded except the admin; add everyon
 | Edit people | all fields | assignment fields of own team | via request | via request (own) |
 | Attendance correction | direct | direct (own team) | via request | via request |
 | Void attendance / archive user | yes | no | no | no |
-| Approve requests | any stage (ADMIN_OVERRIDE) | manager stage | HR stage | no |
+| Approve requests | any stage (override) | manager stage + HR stage | HR stage | no |
 
 Login is User ID + password only (no OTP). The User ID can be the employee ID, email or mobile. Admin (or HR for employees) sets the initial password when creating an account, or leaves it blank for a generated one; users change it at first login.
+
+Authority is Admin > COO > Manager > HR: each can also decide a request still waiting at a lower stage (final, logged as an override).
 
 Request flow: Employee -> HR -> Manager -> applied. HR -> Manager -> applied. Manager -> Admin -> applied. A missing or inactive stage is skipped; with no approver left it waits for Admin. Admin can override any stage.
 
@@ -58,3 +60,25 @@ Not exercised by the automated test (needs a real deployed script).
 ## Tests
 
 `npm run build && npm run test:smoke` runs 28 API checks against a throwaway in-memory MongoDB (downloads a mongod binary on first run).
+
+## Hosting (Cloudflare Workers)
+
+Live at https://attendance.shineinfosolutions.in (Worker `shine-attendance`, built with `@opennextjs/cloudflare`; config in `wrangler.jsonc`).
+
+```bash
+npm run deploy                     # build + deploy
+npx wrangler secret put NAME       # change a secret (MONGODB_URI, CLOUDINARY_*, SMTP_*, CRON_SECRET)
+npx wrangler tail                  # live logs
+```
+
+- `APP_URL` and `SESSION_HOURS` are plain vars in `wrangler.jsonc`; everything else is a Worker secret. For local Workers testing put them in `.dev.vars` (git-ignored) and run `npm run preview`.
+- Crons (Cloudflare cron triggers → `worker.js` → `/api/cron/*` with `CRON_SECRET`): `end-of-day` every 15 min from 5:30 to 9:15 PM IST checks out everyone once office hours end (default 6 PM); `daily-report` at 8 PM IST marks un-updated tasks as late submissions and emails the day report to `REPORT_EMAIL` only.
+- Workers can't share a socket between requests, so on Cloudflare each API request opens its own MongoDB connection (see `withDb` in `src/lib/db.js`); background emails/Sheets sync use `defer()` so they finish before it closes. MongoDB Atlas Network Access must allow Cloudflare (0.0.0.0/0).
+- The zone has a `*.shineinfosolutions.in/*` route for `hotel-erp`; the explicit `attendance.shineinfosolutions.in/*` route in `wrangler.jsonc` keeps this subdomain on this Worker.
+
+## Daily tasks, emails and location
+
+- **Tasks** (`/tasks`): HR (and Manager / COO / Admin) assign tasks for a day and mark them Done / Not done in the evening. Not done, never updated by 8 PM, or done on a later day = **Late submission**, score 0. Employees see their tasks and 30-day work status (also on their profile). Synced to the **Tasks** tab of the Google Sheet (no script change needed).
+- **Emails**: employees get only welcome / password and check-in / check-out mails (including auto check-outs). Approvers still get "approval needed"; Admin + COO get changes and alerts. The detailed attendance + task report goes only to `REPORT_EMAIL`.
+- **Location**: every page of the app (`LocationGuard`) re-checks position when it is opened or brought to the front and every 30 s while visible; far away (> 100 m with good GPS) = checked out at once. Browsers pause closed web apps, so nothing runs while the app is fully closed; the 6 PM check-out is the backstop.
+- **Profile photo**: people upload their own (Admin can change anyone's); stored privately in Cloudinary like attendance photos.

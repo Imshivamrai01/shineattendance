@@ -2,14 +2,21 @@ import { M, getSettings } from './db.js';
 import { audit } from './audit.js';
 import { bad, notFound, HttpError } from './http.js';
 import { dateKey } from './dates.js';
+import { afterHours, closingTime, hoursCfg, label12 } from './hours.js';
 import { distanceMeters } from './geo.js';
 import { photosEnabled, uploadAttendancePhoto } from './cloudinary.js';
 import { queueSheetSync } from './sheetSync.js';
 import { notifyReentry, notifyAttendanceChange, notifyCheckin, notifyCheckout } from './notify.js';
 
-const MAX_CHECKIN_ACCURACY_M = 30;  // GPS fixes worse than this can't prove a 5 m rule
+const MAX_CHECKIN_ACCURACY_M = 30;  // GPS fixes worse than this get the "weak GPS" hint
+const MAX_GPS_MARGIN_M = 40;        // most uncertainty we will forgive, however poor the fix
 const IGNORE_PING_ACCURACY_M = 50;  // ...and are ignored when deciding to auto check-out
 const OUT_PINGS_TO_CHECKOUT = 2;    // consecutive out-of-range pings (avoids one-off GPS jumps)
+const CLEARLY_AWAY_M = 100;         // this far (with a good fix) = left for sure: check out on the first ping
+
+// Phones report accuracy as a ~68% radius, and indoors a fix is easily 20-40 m off. Allow twice the reported
+// accuracy (capped) so someone inside the office isn't refused, or checked out, because of GPS error.
+const gpsMargin = (accuracy) => (accuracy == null ? 0 : Math.min(Math.round(accuracy * 2), MAX_GPS_MARGIN_M));
 
 function readCoords(coords) {
   const lat = Number(coords?.lat), lng = Number(coords?.lng);
@@ -43,17 +50,20 @@ async function checkInGeo(user, coords) {
     if (!best || distance < best.distance) best = { loc: l, distance };
   }
   const distance = Math.round(best.distance);
-  const verified = distance <= best.loc.radiusMeters;
+  const verified = distance <= best.loc.radiusMeters + gpsMargin(c.accuracy);
   if (!verified && settings.enforceGeofence) {
     const weak = c.accuracy != null && c.accuracy > MAX_CHECKIN_ACCURACY_M;
-    throw new HttpError(403, `You are not in the office (about ${distance} m from ${best.loc.name}; check-in needs ${best.loc.radiusMeters} m).` +
-      (weak ? ` Your device location is only accurate to ${Math.round(c.accuracy)} m. Use a phone with GPS turned on.` : ''));
+    throw new HttpError(403, `You are not in the office (about ${distance} m from ${best.loc.name}; check-in needs ${best.loc.radiusMeters} m` +
+      (c.accuracy != null ? `, your GPS is accurate to ±${Math.round(c.accuracy)} m).` : ').') +
+      (weak ? ' Turn on GPS / precise location, step near a window and try again.' : ''));
   }
-  return { geo: { lat: c.lat, lng: c.lng, distance, verified }, location: best.loc._id };
+  return { geo: { lat: c.lat, lng: c.lng, distance, accuracy: c.accuracy ?? undefined, verified }, location: best.loc._id };
 }
 
 export async function checkIn(ctx, coords) {
   const user = ctx.user;
+  const cfg = await getSettings();
+  if (afterHours(cfg)) throw new HttpError(403, `Office hours are over. Check-in closes at ${label12(hoursCfg(cfg).workEnd)}.`);
   const { geo, location } = await checkInGeo(user, coords);
   const date = dateKey();
   if (await M.Attendance.exists({ user: user._id, status: 'ACTIVE', 'sessions.checkOut': null })) throw new HttpError(409, 'You are already checked in');
@@ -116,18 +126,24 @@ export async function ping(ctx, coords) {
   const c = readCoords(coords);
   const rec = await M.Attendance.findOne({ user: user._id, status: 'ACTIVE', 'sessions.checkOut': null }).sort({ date: -1 });
   if (!rec) return { open: false };
+  const cfg = await getSettings();
+  if (rec.date < dateKey() || afterHours(cfg)) {
+    await closeAtEndOfDay(ctx, rec, cfg);
+    return { open: false, autoCheckedOut: true, endOfDay: true };
+  }
   const loc = rec.location ? await M.Location.findById(rec.location).lean() : null;
   if (!loc || !c.ok || (c.accuracy != null && c.accuracy > IGNORE_PING_ACCURACY_M)) return { open: true, ignored: true };
   const session = rec.sessions.find((s) => !s.checkOut);
   const distance = Math.round(distanceMeters(c.lat, c.lng, loc.latitude, loc.longitude));
   const limit = loc.checkoutRadiusMeters ?? 20;
-  if (distance <= limit) {
+  if (distance <= limit + gpsMargin(c.accuracy)) {
     if (session.outCount) { session.outCount = 0; session.firstOutAt = undefined; await rec.save(); }
     return { open: true, distance, limit };
   }
   session.outCount = (session.outCount || 0) + 1;
   session.firstOutAt ||= new Date();
-  if (session.outCount < OUT_PINGS_TO_CHECKOUT) { await rec.save(); return { open: true, distance, limit, warning: true }; }
+  const clearlyAway = distance > Math.max(CLEARLY_AWAY_M, limit * 3) && c.accuracy != null && c.accuracy <= IGNORE_PING_ACCURACY_M;
+  if (session.outCount < OUT_PINGS_TO_CHECKOUT && !clearlyAway) { await rec.save(); return { open: true, distance, limit, warning: true }; }
   session.checkOut = session.firstOutAt > session.checkIn ? session.firstOutAt : new Date();
   session.autoCheckout = true;
   session.outGeo = { lat: c.lat, lng: c.lng, distance, verified: false };
@@ -138,6 +154,36 @@ export async function ping(ctx, coords) {
   queueSheetSync(rec._id);
   notifyCheckout({ userId: user._id, recId: rec._id, at: session.checkOut, auto: true, distance });
   return { open: false, autoCheckedOut: true, distance, limit };
+}
+
+/** Close every open session of a record at office closing time (or now, if that is earlier). */
+async function closeAtEndOfDay(ctx, rec, cfg) {
+  const close = closingTime(rec.date, cfg);
+  const at = close < new Date() ? close : new Date();
+  let n = 0;
+  for (const s of rec.sessions) {
+    if (s.checkOut) continue;
+    s.checkOut = at > s.checkIn ? at : new Date(s.checkIn);
+    s.endOfDay = true; s.outCount = 0; s.firstOutAt = undefined;
+    n++;
+  }
+  if (!n) return false;
+  await rec.save();
+  await audit(ctx, { raw: true, action: 'END_OF_DAY_CHECKOUT', entityType: 'Attendance', entityId: rec._id, subjectId: rec.user,
+    newData: { checkOut: at }, reason: `Office closes at ${label12(hoursCfg(cfg).workEnd)}` });
+  queueSheetSync(rec._id);
+  notifyCheckout({ userId: rec.user, recId: rec._id, at, endOfDay: true });
+  return true;
+}
+
+/** Scheduled: once office hours are over, check out everyone who is still checked in. */
+export async function endOfDayCheckout(ctx) {
+  const cfg = await getSettings();
+  if (!afterHours(cfg)) return { skipped: `office is open until ${label12(hoursCfg(cfg).workEnd)}` };
+  const open = await M.Attendance.find({ status: 'ACTIVE', 'sessions.checkOut': null });
+  let closed = 0;
+  for (const rec of open) if (await closeAtEndOfDay(ctx, rec, cfg)) closed++;
+  return { closed };
 }
 
 const fmt = (d) => (d ? new Date(d).toISOString() : null);

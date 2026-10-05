@@ -3,7 +3,7 @@ export const DEFAULT_HOURS = { workStart: '10:00', workEnd: '18:00', graceMinute
 export const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const toMin = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m; };
-const istMin = (d) => { const x = new Date(new Date(d).getTime() + 330 * 60000); return x.getUTCHours() * 60 + x.getUTCMinutes(); };
+export const istMin = (d) => { const x = new Date(new Date(d).getTime() + 330 * 60000); return x.getUTCHours() * 60 + x.getUTCMinutes(); };
 export const hoursCfg = (s) => ({ workStart: s?.workStart || DEFAULT_HOURS.workStart, workEnd: s?.workEnd || DEFAULT_HOURS.workEnd, graceMinutes: Number(s?.graceMinutes) || 0 });
 
 /** "10:00" -> "10:00 AM", "18:00" -> "6:00 PM" */
@@ -27,3 +27,8 @@ export function dayFlags(rec, cfg) {
   const early = closed && outMin < end;
   return { late, lateMinutes: late ? inMin - start : 0, early, earlyMinutes: early ? end - outMin : 0 };
 }
+
+/** True once office hours are over for the day (IST), e.g. from 18:00. */
+export const afterHours = (cfg, d = new Date()) => istMin(d) >= toMin(hoursCfg(cfg).workEnd);
+/** The office closing instant of an IST date key ("2026-09-30" -> 18:00 IST that day). */
+export const closingTime = (dateKey, cfg) => new Date(`${dateKey}T${hoursCfg(cfg).workEnd}:00+05:30`);

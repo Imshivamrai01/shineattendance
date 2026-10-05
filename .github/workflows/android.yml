@@ -1,0 +1,60 @@
+name: Android APK
+
+# Builds the Android app in android/ and publishes the APK as a GitHub release.
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: shine
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      # With the signing secrets set, build a release APK that installs over earlier versions.
+      # Without them, build a debug APK (signed with a throw-away key: uninstall the old one before updating).
+      - name: Build APK
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            export KEYSTORE_FILE="$RUNNER_TEMP/release.p12"
+            gradle -p android assembleRelease --no-daemon
+            cp android/app/build/outputs/apk/release/app-release.apk ShineAttendance.apk
+          else
+            gradle -p android assembleDebug --no-daemon
+            cp android/app/build/outputs/apk/debug/app-debug.apk ShineAttendance.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShineAttendance-apk
+          path: ShineAttendance.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "android-v1.0.${BUILD_NUMBER}" ShineAttendance.apk \
+            --title "Shine Attendance Android 1.0.${BUILD_NUMBER}" \
+            --notes "Install ShineAttendance.apk on an Android phone (Android 8 or newer)." \
+            --target "$GITHUB_SHA"

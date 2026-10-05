@@ -20,7 +20,7 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests' };
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local' };
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
 let r = await seed(); assert.match(r.stdout, /created/, r.stdout + r.stderr);
@@ -97,8 +97,9 @@ try {
   assert.equal(weak.status, 403); assert.match(weak.data.error, /not in the office/); t('outside + weak GPS => "not in the office"');
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 }));
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('moving beyond checkout radius auto checks out');
+  // ~67 m away: beyond the 20 m checkout radius but not clearly gone => warning first, check-out on the 2nd ping
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('moving beyond checkout radius auto checks out');
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732 })).open, false);
   // Left the premises => next check-in needs a reason
   const noReason = await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 });
@@ -107,7 +108,8 @@ try {
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Went out for a client meeting' })); t('re-check-in after leaving premises requires a reason');
   ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 }));
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 })); t('no reason needed after a normal check-out');
-  ok(await e.call('POST', '/api/attendance/check-out', {}));
+  // ~155 m away with a good fix (e.g. the app reopened at home): checked out on the very first ping
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('clearly away => immediate auto check-out');
 
   // Employee cannot use admin APIs or see others
   assert.equal((await e.call('GET', '/api/audit-logs')).status, 403);
@@ -121,7 +123,7 @@ try {
     ok(await c.call('POST', '/api/auth/login', { identifier: id, password: u.tempPassword }));
     ok(await c.call('POST', '/api/auth/change-password', { currentPassword: u.tempPassword, newPassword: 'Staff#Pass12' }));
   }
-  assert.equal((await mgrC.call('POST', `/api/requests/${rq._id}`, { decision: 'approve' })).status, 403); t('manager cannot skip HR stage');
+  assert.equal((await e.call('POST', `/api/requests/${rq._id}`, { decision: 'approve' })).status, 403); t('employee cannot approve their own request');
   ok(await hrC.call('POST', `/api/requests/${rq._id}`, { decision: 'approve' }));
   assert.equal((await hrC.call('POST', `/api/requests/${rq._id}`, { decision: 'approve' })).status, 403);
   ok(await mgrC.call('POST', `/api/requests/${rq._id}`, { decision: 'approve' })); t('HR then Manager approval applies change');
@@ -163,7 +165,7 @@ try {
 
   // COO: second in command. Manager sees everyone; Manager requests go to COO; COO requests go to Admin.
   const coo = ok(await admin.call('POST', '/api/users', { role: 'COO', employeeId: 'COO-1', name: 'Chief Ops', email: 'coo@test.local', password: 'Coo#Password1' }));
-  const cooC = new Client(); ok(await cooC.call('POST', '/api/auth/login', { identifier: 'coo-1', password: 'Coo#Password1' }));
+  const cooC = new Client(); ok(await cooC.call('POST', '/api/auth/login', { identifier: ' coo - 1 ', password: 'Coo#Password1' })); // employee ID: any case, stray spaces ignored
   ok(await cooC.call('POST', '/api/auth/change-password', { currentPassword: 'Coo#Password1', newPassword: 'Coo#Password2' }));
   ok(await admin.call('POST', '/api/users', { role: 'EMPLOYEE', employeeId: 'E-300', name: 'Unassigned Emp' }));
   assert.equal(ok(await mgrC.call('GET', '/api/users?q=E-300')).total, 1); t('manager sees every employee (not only assigned)');
@@ -246,34 +248,75 @@ try {
   assert.ok(has('rahul@example.com', /Checked in (late )?at/) && has('rahul@example.com', /Checked out at/), 'employee check-in / check-out mails');
   assert.ok(has('rahul@example.com', /checked out automatically/), 'employee auto check-out mail'); assert.ok(has('rahul@example.com', /Checked in late at/), 'late check-in email'); t('employee gets check-in (late), check-out and auto check-out emails');
   assert.ok(has('admin-inbox@test.local', /re-entered after leaving/), 'admin re-entry mail'); assert.ok(has('coo@test.local', /re-entered after leaving/) || true);
-  assert.ok(has('rahul@example.com', /attendance for .* was corrected/) && has('admin-inbox@test.local', /Attendance corrected/), 'attendance correction mails');
-  assert.ok(has('rahul@example.com', /attendance for .* was voided/) && has('admin-inbox@test.local', /Attendance voided/), 'attendance void mails'); t('attendance corrected/voided: employee + admin emailed');
-  assert.ok(has('rahul@example.com', /request was submitted/), 'submitted mail to employee');
+  assert.ok(has('admin-inbox@test.local', /Attendance corrected/) && has('admin-inbox@test.local', /Attendance voided/), 'attendance correction mails to admin');
+  assert.ok(!has('rahul@example.com', /was corrected|was voided/), 'employee gets no correction mail'); t('attendance corrected/voided: admin emailed, employee not');
   assert.ok(has('amit@example.com', /Approval needed/), 'approver (manager) mail');
-  assert.ok(has('rahul@example.com', /Approved: profile change/) && has('admin-inbox@test.local', /Approved: profile change/), 'approved mails'); t('requests: submitted, approval-needed (approver), approved (employee + admin)');
+  assert.ok(has('admin-inbox@test.local', /Approved: profile change/), 'approved mail to admin');
+  assert.ok(!has('rahul@example.com', /request was submitted|Approved:|Rejected:/), 'employee gets no request mails'); t('requests: approval-needed (approver) + outcome (admin); employee gets none');
+  const kinds = new Set(mailsTo('rahul@example.com').map((m) => (/Welcome/.test(m.subject) ? 'welcome' : /Checked (in|out)|checked out automatically/.test(m.subject) ? 'attendance' : m.subject)));
+  assert.deepEqual([...kinds].sort(), ['attendance', 'welcome']); t('employee mailbox: only welcome + check-in/check-out mails');
   assert.ok(has('coo@test.local', /Approval needed|Approved|Attendance|Profile updated/), 'COO gets approvals/changes');
-  assert.ok(has('rahul@example.com', /Your details were updated/) && has('admin-inbox@test.local', /Profile updated: Rahul/), 'direct edit mails'); t('direct profile edit: employee + admin emailed');
+  assert.ok(has('admin-inbox@test.local', /Profile updated: Rahul/) && !has('rahul@example.com', /Your details were updated/), 'direct edit mails'); t('direct profile edit: admin emailed, employee not');
   const nobody = outbox.filter((m) => m.to.includes('admin@shineinfo.in'));
   assert.equal(nobody.length, 0, 'the placeholder admin login email must not receive alerts when a notification email is set'); t('admin alerts go to the Notification email only');
 
+  // Daily tasks: HR assigns, employee sees, HR updates in the evening (Rahul was archived above, so a new employee)
+  const pv = ok(await admin.call('POST', '/api/users', { role: 'EMPLOYEE', employeeId: 'E-500', name: 'Priya Verma', email: 'priya@example.com', department: dept._id, hr: hr.user._id, location: loc._id, password: 'Priya#Pass500' }));
+  const pe = new Client();
+  if (ok(await pe.call('POST', '/api/auth/login', { identifier: 'priya@example.com', password: 'Priya#Pass500' })).mustChangePassword) ok(await pe.call('POST', '/api/auth/change-password', { currentPassword: 'Priya#Pass500', newPassword: 'Priya#Pass501' }));
+  // Authority Admin > COO > Manager > HR: a COO (or the Manager) can decide a request that is still waiting for HR
+  const rqC = ok(await pe.call('POST', '/api/requests', { type: 'PROFILE_CHANGE', changes: { city: 'Lucknow' }, reason: 'Moved to a new city' })).item;
+  assert.equal(rqC.status, 'PENDING_HR');
+  assert.ok(ok(await cooC.call('GET', '/api/requests?pending=1')).items.find((x) => x._id === rqC._id).canAct, 'COO sees Approve on an HR-stage request');
+  const decided = ok(await cooC.call('POST', `/api/requests/${rqC._id}`, { decision: 'approve' })).item;
+  assert.equal(decided.status, 'APPROVED'); assert.equal(decided.history.at(-1).override, true);
+  assert.equal(ok(await admin.call('GET', `/api/users/${pv.user._id}`)).user.city, 'Lucknow');
+  const rqM = ok(await pe.call('POST', '/api/requests', { type: 'PROFILE_CHANGE', changes: { state: 'Uttar Pradesh' }, reason: 'Adding my state' })).item;
+  assert.equal(ok(await mgrC.call('POST', `/api/requests/${rqM._id}`, { decision: 'approve' })).item.status, 'APPROVED'); t('COO and Manager can approve a request waiting for HR (final, logged as override)');
+  const tk1 = ok(await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Call 20 leads', details: 'Gorakhpur list' })).task;
+  const tk2 = ok(await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Send quotation to ABC' })).task;
+  assert.equal((await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'x' })).status, 400);
+  assert.equal((await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Past task', date: '2020-01-01' })).status, 400);
+  assert.equal((await pe.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Self task' })).status, 403); t('HR assigns daily tasks; employees cannot');
+  const mine = ok(await pe.call('GET', '/api/tasks?mine=1'));
+  assert.equal(mine.tasks.length, 2); assert.equal(mine.canAssign, false); assert.equal(mine.people, undefined); t('employee sees own tasks');
+  assert.equal((await pe.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE' })).status, 403);
+  const done = ok(await hrC.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE', note: 'All 20 called' })).task;
+  assert.equal(done.late, false); t('HR marks work done the same day (scores 1)');
+  const team = ok(await hrC.call('GET', '/api/tasks'));
+  assert.ok(team.people.some((p) => p._id === pv.user._id)); assert.equal(team.tasks.length, 2); t('HR sees the team tasks and assignable people');
+
   // Scheduled jobs
-  assert.equal((await admin.call('GET', '/api/cron/absent-check')).status, 401); t('cron endpoints reject requests without the secret');
+  assert.equal((await admin.call('GET', '/api/cron/daily-report')).status, 401); t('cron endpoints reject requests without the secret');
   const cronCall = async (path) => { const res = await fetch(BASE + path, { headers: { authorization: 'Bearer cron-secret-for-tests' } }); return { status: res.status, data: await res.json() }; };
-  const abs = await cronCall('/api/cron/absent-check');
-  assert.equal(abs.status, 200);
-  if (!abs.data.skipped) {
-    await wait(2000);
-    assert.ok(has('amit@example.com', /have not checked in today/), 'absent person is emailed');
-    assert.ok(has('admin-inbox@test.local', /Absent so far today/), 'admin digest');
-    assert.equal((await cronCall('/api/cron/absent-check')).data.skipped, 'already sent today'); t('absent job: each absent person + digests, sent once per day');
-  } else t('absent job skipped (' + abs.data.skipped + ')');
-  const sum = await cronCall('/api/cron/daily-summary'); assert.equal(sum.status, 200); await wait(1500);
-  assert.ok(has('admin-inbox@test.local', /Attendance summary/) && has('coo@test.local', /Attendance summary/), 'summary to admin + COO'); t('evening summary goes to Admin + COO');
+  assert.ok(ok(await cronCall('/api/cron/end-of-day')).skipped, 'office still open => nothing closed');
+  ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5,  }));
+  // Android app: its background service reports location with its own token (no login cookie)
+  const trackToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
+  const track = async (token, body) => { const res = await fetch(BASE + '/api/attendance/track', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };
+  assert.equal((await track('not-a-real-token-not-a-real-token', { lat: 26.7607, lng: 83.3733 })).status, 401);
+  assert.equal(ok(await track(trackToken, { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true);
+  const oldToken = trackToken, newToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
+  assert.equal((await track(oldToken, {})).status, 401); assert.equal(ok(await track(newToken, {})).open, true); t('app background service: token-only location reports; a new token replaces the old one');
+  ok(await admin.call('PATCH', '/api/settings', { workStart: '00:00', workEnd: '00:01', reason: 'Simulate office closing' }));
+  assert.equal(ok(await cronCall('/api/cron/end-of-day')).closed, 1);
+  assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.checkedIn, false);
+  assert.equal((await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Late work' })).status, 403); t('after office hours: everyone checked out, check-in closed');
+  const rep = ok(await cronCall('/api/cron/daily-report'));
+  assert.equal(rep.tasks.finalized, 1); assert.ok(rep.report.present >= 1);
+  const late = ok(await pe.call('GET', '/api/tasks?mine=1')).tasks.find((x) => x._id === tk2._id);
+  assert.equal(late.status, 'NOT_DONE'); assert.equal(late.label, 'Late submission'); assert.equal(late.score, 0); t('un-updated task becomes a late submission (score 0)');
+  await wait(2000);
+  const report = mailsTo('report@test.local').find((m) => /Attendance report/.test(m.subject));
+  assert.ok(report && report.html.includes('Priya Verma') && report.html.includes('Call 20 leads') && report.html.includes('Late submission'), 'detailed report');
+  assert.ok(has('priya@example.com', /office closing/), 'end-of-day check-out mail');
+  assert.equal(outbox.filter((m) => /Attendance report|Attendance summary|Absent so far/.test(m.subject) && !m.to.includes('report@test.local')).length, 0, 'report goes nowhere else');
+  t('evening report (attendance + tasks) goes only to the report address');
 
   // Security: lock an account
   for (let i = 0; i < 5; i++) await new Client().call('POST', '/api/auth/login', { identifier: 'amit@example.com', password: 'wrong-password' });
   await wait(2000);
-  assert.ok(has('amit@example.com', /account was locked/) && has('admin-inbox@test.local', /Account locked/), 'lockout mails'); t('locked account: user + admin emailed');
+  assert.ok(has('admin-inbox@test.local', /Account locked/) && !has('amit@example.com', /account was locked/), 'lockout mails'); t('locked account: admin emailed');
 
   console.log(`\nAll ${step} checks passed.`);
 } catch (e) {

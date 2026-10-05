@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
-import { M } from './db.js';
+import { M, model as dbModel } from './db.js';
+import { photoUrl } from './cloudinary.js';
 import { audit } from './audit.js';
 import { bad, forbidden, notFound } from './http.js';
 import { hashPassword, randomPassword, passwordProblem, destroyAllSessions } from './auth.js';
@@ -74,7 +75,7 @@ async function validateRefs(changes, subject) {
   for (const [field, model] of Object.entries(REF_FIELDS)) {
     const id = changes[field];
     if (!id) continue;
-    const doc = await mongoose.models[model].findById(id).lean();
+    const doc = await dbModel(model).findById(id).lean();
     if (!doc) throw bad(`Selected ${field} does not exist`);
     if (field === 'manager' && (!['MANAGER', 'COO'].includes(doc.role) || doc.status !== 'ACTIVE')) throw bad('Selected user is not an active Manager or COO');
     if (field === 'hr' && (doc.role !== 'HR' || doc.status !== 'ACTIVE')) throw bad('Selected user is not an active HR');
@@ -86,7 +87,7 @@ async function validateRefs(changes, subject) {
 async function displayValue(field, value) {
   if (value == null || value === '') return null;
   if (field in REF_FIELDS) {
-    const d = await mongoose.models[REF_FIELDS[field]].findById(value).select('name').lean();
+    const d = await dbModel(REF_FIELDS[field]).findById(value).select('name').lean();
     return d ? d.name : String(value);
   }
   return typeof value === 'object' && value.toObject ? value.toObject() : value;
@@ -225,7 +226,8 @@ export async function loadVisibleUser(actor, id) {
 export function completion(u) {
   const missing = [];
   let done = 0;
-  const keys = Object.keys(COMPLETION_FIELDS);
+  // Admins, COOs and Managers report to nobody (the editor hides the field), so it can't count against them.
+  const keys = Object.keys(COMPLETION_FIELDS).filter((k) => !(k === 'manager' && ['ADMIN', 'COO', 'MANAGER'].includes(u.role)));
   for (const k of keys) {
     const v = u[k];
     const ok = CONTACT_FIELDS.includes(k) ? !!(v && v.name && v.mobile) : v != null && v !== '';
@@ -244,5 +246,6 @@ export function publicUser(u) {
   const o = u.toObject ? u.toObject() : { ...u };
   delete o.passwordHash; delete o.failedLogins; delete o.lockedUntil; delete o.__v;
   o.completion = completion(o);
+  o.photoUrl = photoUrl(o.photo);
   return o;
 }

@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/client';
 import { useMe } from '@/components/Shell';
 import { Badge, Empty, statusTone, Skeleton } from '@/components/ui';
+import Avatar from '@/components/Avatar';
 
 const LABEL = { COO: 'COO', MANAGER: 'Manager', HR: 'HR', EMPLOYEE: 'Employee' };
 const EMPTY = { COO: 'No COO added yet.', MANAGER: 'No Managers added yet.', HR: 'No HR users added yet.', EMPLOYEE: 'No employees added yet.' };
@@ -45,23 +46,29 @@ function List() {
         </select>
       </div>
       {err && <div className="alert">{err}</div>}
-      <div className="card scroll">
+      <div className="card">
         {!data ? <Skeleton /> : data.items.length === 0 ? (
           filtering && !(role && !q && !status)
             ? <Empty message="No people match these filters." />
             : <Empty message={role ? EMPTY[role] : 'No people added yet.'} actionHref={canAdd ? `/users/new${role ? `?role=${role}` : ''}` : undefined}
                 actionLabel={`+ Add ${role ? LABEL[role] : 'Employee'}`} />
         ) : (
-          <table>
-            <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Department</th><th>Manager</th><th>Profile</th><th>Status</th></tr></thead>
-            <tbody>{data.items.map((u) => (
-              <tr key={u._id}>
-                <td>{u.employeeId || '—'}</td>
-                <td><Link href={`/users/${u._id}`}>{u.name}</Link><div className="muted small">{u.email || u.mobile}</div></td>
-                <td>{u.role}</td><td>{u.department?.name || '—'}</td><td>{u.manager?.name || '—'}</td>
-                <td>{u.completion.percent}%</td><td><Badge tone={statusTone(u.status)}>{u.status}</Badge></td>
-              </tr>))}</tbody>
-          </table>
+          <div className="people-grid">
+            {data.items.map((u) => (
+              <Link key={u._id} href={`/users/${u._id}`} className="person-card">
+                <Avatar user={u} size={56} />
+                <div className="person-info">
+                  <b className="person-name">{u.name}</b>
+                  <div className="muted small">{u.designation || LABEL[u.role] || u.role}{u.employeeId ? ` · ${u.employeeId}` : ''}</div>
+                  <div className="muted small">{u.department?.name || 'No department'}{u.manager?.name ? ` · reports to ${u.manager.name}` : ''}</div>
+                  <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                    <Badge tone={statusTone(u.status)}>{u.status}</Badge>
+                    <Badge>{LABEL[u.role] || u.role}</Badge>
+                    {u.completion.percent < 100 && <Badge tone="warn">Profile {u.completion.percent}%</Badge>}
+                  </div>
+                </div>
+              </Link>))}
+          </div>
         )}
       </div>
     </>

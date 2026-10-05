@@ -122,3 +122,17 @@ export function employeeRow(u) {
 }
 export const upsertEmployee = (settings, row) => post(settings, { action: 'upsert', tab: EMP_TAB, header: EMP_HEADER, rows: [row] });
 export const replaceEmployees = (settings, rows) => post(settings, { action: 'replace', tab: EMP_TAB, header: EMP_HEADER, rows });
+
+// ---- Tasks tab: one row per task, keyed by task id ----
+export const TASK_TAB = 'Tasks';
+export const TASK_HEADER = ['Key', 'Date', 'Employee ID', 'Name', 'Task', 'Details', 'Assigned by', 'Status', 'Score', 'Late submission', 'HR note', 'Updated by', 'Updated'];
+
+/** `t` must have user / assignedBy / reviewedBy populated with { name, employeeId }. */
+export function taskRow(t, label, score) {
+  return [
+    String(t._id), t.date, t.user?.employeeId || '', t.user?.name || '', t.title, t.details || '', t.assignedBy?.name || '',
+    label, score, t.late ? 'Yes' : 'No', t.note || '', t.reviewedBy?.name || '', new Date().toISOString(),
+  ];
+}
+export const upsertTask = (settings, row) => post(settings, { action: 'upsert', tab: TASK_TAB, header: TASK_HEADER, rows: [row] });
+export const replaceTasks = (settings, rows) => post(settings, { action: 'replace', tab: TASK_TAB, header: TASK_HEADER, rows });

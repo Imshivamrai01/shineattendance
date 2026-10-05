@@ -1,6 +1,6 @@
-import { after } from 'next/server';
-import { M, getSettings } from './db.js';
-import { rowFor, upsertRow, sheetsConfigured, employeeRow, upsertEmployee } from './sheets.js';
+import { M, getSettings, defer } from './db.js';
+import { rowFor, upsertRow, sheetsConfigured, employeeRow, upsertEmployee, taskRow, upsertTask } from './sheets.js';
+import { taskLabel, taskScore } from './taskScore.js';
 
 const hoursWorked = (rec) => Math.round(((rec.sessions || []).reduce((ms, s) => ms + (s.checkIn && s.checkOut ? new Date(s.checkOut) - new Date(s.checkIn) : 0), 0) / 3600000) * 100) / 100;
 
@@ -22,7 +22,7 @@ async function run(recId) {
 /** Sync one attendance record to Google Sheets after the response is sent. */
 export function queueSheetSync(recId) {
   const id = String(recId);
-  try { after(() => run(id)); } catch { run(id); }
+  defer(() => run(id));
 }
 
 async function runEmployee(userId) {
@@ -42,5 +42,34 @@ async function runEmployee(userId) {
 /** Sync one person's profile row to the Employees tab after the response is sent. */
 export function queueEmployeeSync(userId) {
   const id = String(userId);
-  try { after(() => runEmployee(id)); } catch { runEmployee(id); }
+  defer(() => runEmployee(id));
 }
+
+const populateTask = (q) => q.populate('user', 'name employeeId').populate('assignedBy', 'name').populate('reviewedBy', 'name');
+
+async function pushTaskRow(row) {
+  try {
+    const s = await getSettings();
+    if (!sheetsConfigured(s)) return;
+    await upsertTask(s, row);
+    await M.Setting.updateOne({ key: 'system' }, { $set: { lastSheetSync: new Date() }, $unset: { lastSheetError: '', lastSheetErrorAt: '' } });
+  } catch (e) {
+    console.error('Sheets task sync failed:', e.message);
+    await M.Setting.updateOne({ key: 'system' }, { $set: { lastSheetError: String(e.message).slice(0, 400), lastSheetErrorAt: new Date() } }).catch(() => {});
+  }
+}
+
+/** Sync one task to the Tasks tab after the response is sent. */
+export function queueTaskSync(taskId) {
+  const id = String(taskId);
+  defer(async () => {
+    const t = await populateTask(M.Task.findById(id)).lean();
+    if (t) await pushTaskRow(taskRow(t, taskLabel(t), taskScore(t)));
+  });
+}
+
+/** A deleted task stays in the sheet, marked Deleted. `t` = the populated task before deletion. */
+export function queueTaskRemoved(t) {
+  defer(() => pushTaskRow(taskRow(t, 'Deleted', 0)));
+}
+export { populateTask };

@@ -41,7 +41,10 @@ h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -.02em; } h2 { font-size:
 .bottom, .scrim { display: none; }
 @media (max-width: 800px) {
   body { padding-top: env(safe-area-inset-top); }
-  .shell { grid-template-columns: 1fr; }
+  /* minmax(0, …): long content (emails, addresses) must wrap, not widen the whole page */
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .main { min-width: 0; }
+  td { overflow-wrap: anywhere; }
   /* 'More' opens the full menu as a drawer */
   .side { position: fixed; z-index: 60; left: 0; top: 0; bottom: 0; width: 280px; max-width: 86vw; height: auto; transform: translateX(-105%); transition: transform .22s ease; box-shadow: 0 0 40px rgba(0,0,0,.25); padding-top: calc(18px + env(safe-area-inset-top)); }
   .side.open { transform: none; }
@@ -143,7 +146,7 @@ pre.diff { margin: 0; font: 12px/1.45 ui-monospace, Consolas, monospace; white-s
 @media (prefers-reduced-motion: reduce) { .pulse, .splash-bar i { animation: none; } }
 
 @media (max-width: 800px) {
-  .cols { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stat b { font-size: 26px; }
+  .cols { grid-template-columns: minmax(0, 1fr); } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stat b { font-size: 26px; }
   .form.two, .form.three { grid-template-columns: 1fr; }
   /* 16px inputs stop iOS from zooming in on focus; bigger touch targets */
   input, select, textarea { font-size: 16px; min-height: 44px; max-width: none !important; }
@@ -214,7 +217,110 @@ pre.diff { margin: 0; font: 12px/1.45 ui-monospace, Consolas, monospace; white-s
 .sub-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 @media (max-width: 800px) {
   /* sits above the bottom navigation bar */
-  .savebar { bottom: calc(68px + env(safe-area-inset-bottom)); padding: 10px 12px; }
-  .savebar .btn { flex: 1; }
-  .savebar > span { flex-basis: 100%; }
+  /* status text on its own line, Cancel + Submit as an equal pair below it */
+  .savebar { bottom: calc(68px + env(safe-area-inset-bottom)); padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+  .savebar > span { flex-basis: 100%; margin-right: 0 !important; text-align: center; }
+  .savebar .btn { flex: 1 1 0; min-width: 0; white-space: nowrap; justify-content: center; }
+  .savebar .btn.primary { flex-grow: 1.6; }
+}
+
+/* Label / value detail tables (My profile, person details) */
+table.kv td:first-child { width: 200px; }
+@media (max-width: 800px) {
+  table.kv td { padding: 10px 6px; }
+  table.kv td:first-child { width: 40%; }
+}
+
+/* Profile card */
+.avatar.img { object-fit: cover; padding: 0; background: var(--line); }
+.pcard { padding: 0; overflow: hidden; }
+.pcard-banner { height: 92px; background: var(--grad); }
+.pcard-body { padding: 0 22px 22px; margin-top: -52px; text-align: center; display: flex; flex-direction: column; align-items: center; }
+.pcard-photo { position: relative; }
+.pcard-photo .avatar { border: 4px solid var(--card); box-shadow: 0 6px 18px rgba(20, 26, 42, .18); }
+.pcard-cam { position: absolute; right: 0; bottom: 2px; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--card); background: var(--brand); color: #fff; display: grid; place-items: center; cursor: pointer; }
+.pcard-cam:disabled { opacity: .6; }
+.pcard-name { margin: 10px 0 2px; overflow-wrap: anywhere; }
+.pcard-tags { justify-content: center; margin-top: 8px; gap: 6px; }
+.pcard-contact { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin-top: 14px; font-size: 14px; }
+.pcard-contact a { display: inline-flex; align-items: center; gap: 6px; color: var(--text); min-width: 0; }
+.pcard-contact a span { overflow-wrap: anywhere; }
+.pcard-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; width: 100%; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); text-align: left; }
+.pcard-facts b { font-weight: 600; overflow-wrap: anywhere; }
+.pcard-actions { justify-content: center; margin-top: 16px; }
+@media (max-width: 800px) {
+  .pcard-body { padding: 0 16px 18px; }
+  .pcard-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pcard-actions .btn { flex: 1 1 100%; justify-content: center; }
+}
+
+/* Tasks */
+.task { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.task:first-of-type { border-top: 0; }
+.task-main { flex: 1; min-width: 0; }
+.task-title { font-weight: 600; overflow-wrap: anywhere; }
+.task-meta { margin-top: 2px; }
+.task-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.person-head { display: flex; align-items: center; gap: 10px; }
+@media (max-width: 800px) {
+  .task { flex-direction: column; gap: 8px; }
+  .task-actions { width: 100%; justify-content: stretch; }
+  .task-actions .btn { flex: 1 1 0; justify-content: center; }
+}
+
+/* People directory: one card per person */
+.people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.person-card { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); transition: border-color .15s, box-shadow .15s; min-width: 0; }
+.person-card:hover { border-color: var(--brand); box-shadow: var(--shadow); text-decoration: none; }
+.person-info { min-width: 0; flex: 1; }
+.person-name { display: block; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .people-grid { grid-template-columns: minmax(0, 1fr); } }
+.datebar { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.datebar input { width: auto; max-width: 180px; min-width: 0; flex: 1 1 auto; }
+.task-actions { align-items: center; }
+@media (max-width: 800px) {
+  .datebar { width: 100%; }
+  .datebar input { max-width: none; }
+  .datebar .btn { flex: none; }
+  .card > .row.between > .btn.primary { width: 100%; justify-content: center; }
+  .task-actions .badge { flex: none; }
+}
+
+/* Person rows (dashboard lists): badges sit beside the text on wide screens, under it on phones */
+.li-tags { gap: 6px; flex: none; justify-content: flex-end; max-width: 55%; }
+.li-tags .badge { white-space: nowrap; }
+@media (max-width: 800px) {
+  .li { flex-wrap: wrap; align-items: flex-start; row-gap: 6px; }
+  .li-name { white-space: normal; overflow-wrap: anywhere; }
+  .li-tags { flex: 1 1 100%; max-width: none; justify-content: flex-start; padding-left: 46px; }
+  .li-tags:empty { display: none; }
+}
+
+/* Attendance history (profile / person page) */
+.stats-mini { margin-bottom: 14px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+table.days .unit { display: none; }
+.sess-pair { display: flex; gap: 24px; margin-top: 8px; align-items: flex-start; }
+.sess-pair > div { min-width: 140px; }
+.sess-photo { width: 120px; height: 90px; object-fit: cover; border-radius: 10px; margin-top: 6px; border: 1px solid var(--line); display: block; }
+@media (max-width: 800px) {
+  /* five small tiles: three on the first line, two wider ones on the second */
+  .stats-mini { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .stats-mini .stat { grid-column: span 2; }
+  .stats-mini .stat:nth-child(n+4) { grid-column: span 3; }
+  .stats-mini .stat { padding: 10px 10px 10px 14px; }
+  .stats-mini .stat .muted { font-size: 11.5px; display: block; line-height: 1.25; }
+  .stats-mini .stat b { font-size: 20px; }
+  /* one compact card per day: date | status | hours on one line, sessions underneath */
+  table.stack.days tr { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 10px; padding: 10px 12px; margin-bottom: 8px; }
+  table.stack.days td { padding: 0; }
+  table.stack.days td::before { display: none; }
+  table.stack.days td:nth-child(1) { grid-column: 1; grid-row: 1; font-weight: 600; }
+  table.stack.days td:nth-child(2) { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; gap: 4px; }
+  table.stack.days td:nth-child(4) { grid-column: 3; grid-row: 1; font-weight: 700; text-align: right; white-space: nowrap; }
+  table.stack.days td:nth-child(3) { grid-column: 1 / -1; grid-row: 2; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 14px; }
+  table.stack.days td.none { display: none; }
+  table.stack.days .unit { display: inline; font-weight: 500; color: var(--muted); }
+  .sess-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .sess-pair > div { min-width: 0; }
+  .sess-photo { width: 100%; height: auto; aspect-ratio: 4 / 3; }
 }

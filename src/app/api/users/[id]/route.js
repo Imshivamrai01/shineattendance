@@ -1,6 +1,7 @@
 import { M } from '@/lib/db';
 import { handler, readJson, oid, forbidden, bad, requireReason } from '@/lib/http';
 import { applyUserChanges, canManage, loadVisibleUser, populateUsers, publicUser } from '@/lib/users';
+import { photosEnabled } from '@/lib/cloudinary';
 
 const MANAGER_FIELDS = ['designation', 'department', 'location', 'hr', 'employeeType', 'joiningDate'];
 const COO_FIELDS = [...MANAGER_FIELDS, 'manager'];
@@ -11,7 +12,7 @@ export const GET = handler(async ({ user, params }) => {
   const u = await populateUsers(M.User.findById(id));
   const versions = await M.ProfileVersion.find({ user: id }).sort({ field: 1, version: -1 })
     .populate('changedBy', 'name email').lean();
-  return { user: publicUser(u), versions, canEdit: canManage(user, u) || String(u._id) === String(user._id) };
+  return { user: publicUser(u), versions, canEdit: canManage(user, u) || String(u._id) === String(user._id), photosEnabled: photosEnabled() };
 });
 
 export const PATCH = handler(async (ctx) => {

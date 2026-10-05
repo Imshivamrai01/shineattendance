@@ -19,6 +19,7 @@ function Sessions({ day }) {
       {s.outPhotoUrl && <a href={s.outPhotoUrl} target="_blank" rel="noreferrer"><img className="thumb" src={s.outPhotoUrl} alt="Out" /></a>}
       {s.corrected && <Badge tone="warn">corrected</Badge>}
       {s.autoCheckout && <Badge tone="warn">auto out</Badge>}
+      {s.endOfDay && <Badge>office closed</Badge>}
       {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
     </div>
   ));
@@ -67,21 +68,21 @@ export default function AttendanceHistory({ userId }) {
 
       {mode === 'monthly' ? (
         <>
-          <div className="grid" style={{ marginBottom: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))' }}>
+          <div className="grid stats-mini">
             <div className="stat"><span className="muted">Present days</span><b style={{ color: 'var(--ok)' }}>{s.present}</b></div>
             <div className="stat"><span className="muted">Absent days</span><b style={{ color: s.absent ? 'var(--bad)' : undefined }}>{s.absent}</b></div>
             <div className="stat"><span className="muted">Late days</span><b style={{ color: s.lateDays ? 'var(--warn)' : undefined }}>{s.lateDays}</b></div>
             <div className="stat"><span className="muted">Total hours</span><b>{s.totalHours}</b></div>
             <div className="stat"><span className="muted">Avg / day</span><b>{s.avgHours}</b></div>
           </div>
-          <div className="scroll"><table>
+          <div className="scroll"><table className="days">
             <thead><tr><th>Date</th><th>Status</th><th>Sessions</th><th>Hours</th></tr></thead>
-            <tbody>{data.days.filter((x) => x.status !== 'FUTURE' && x.status !== 'BEFORE_START' || x.sessions.length).map((x) => (
+            <tbody>{data.days.filter((x) => x.status !== 'FUTURE' && x.status !== 'BEFORE_START' || x.sessions.length).reverse().map((x) => ( // newest day first
               <tr key={x.date} style={{ cursor: 'pointer', opacity: x.status === 'WEEK_OFF' ? 0.6 : 1 }} onClick={() => pickDay(x.date)}>
                 <td style={{ whiteSpace: 'nowrap' }}>{x.date.slice(8)} {WD[x.weekday]}</td>
                 <td><Badge tone={TONE[x.status]}>{LABEL[x.status]}</Badge>{x.flags?.late && <> <Badge tone="warn">Late {minutesText(x.flags.lateMinutes)}</Badge></>}{x.flags?.early && <> <Badge tone="warn">Left early</Badge></>}</td>
-                <td><Sessions day={x} /></td>
-                <td>{x.hours || '—'}</td>
+                <td className={x.sessions.length ? '' : 'none'}><Sessions day={x} /></td>
+                <td>{x.hours ? <>{x.hours}<span className="unit"> h</span></> : '—'}</td>
               </tr>))}</tbody>
           </table></div>
         </>
@@ -95,13 +96,13 @@ export default function AttendanceHistory({ userId }) {
           {selected.sessions.length === 0 ? <p className="muted">No attendance recorded on this day.</p> : selected.sessions.map((x, i) => (
             <div key={x._id} className="card" style={{ marginBottom: 10, boxShadow: 'none' }}>
               <div className="row between"><b>Session {i + 1}</b><span className="muted small">{!x.checkOut && 'Still checked in'}</span></div>
-              <div className="row" style={{ gap: 24, marginTop: 8, alignItems: 'flex-start' }}>
+              <div className="sess-pair">
                 {[['Check-in', x.checkIn, x.inPhotoUrl, x.inGeo], ['Check-out', x.checkOut, x.outPhotoUrl, x.outGeo]].map(([label, t, photo, geo]) => (
-                  <div key={label} style={{ minWidth: 140 }}>
+                  <div key={label}>
                     <div className="muted small">{label}</div>
                     <div style={{ fontWeight: 600, fontSize: 18 }}>{fmtTime(t)}</div>
                     {geo?.distance != null && <div className="muted small">{geo.distance} m from office</div>}
-                    {photo && <a href={photo} target="_blank" rel="noreferrer"><img src={photo} alt={label} style={{ width: 120, height: 90, objectFit: 'cover', borderRadius: 10, marginTop: 6, border: '1px solid var(--line)' }} /></a>}
+                    {photo && <a href={photo} target="_blank" rel="noreferrer"><img src={photo} alt={label} className="sess-photo" /></a>}
                   </div>))}
               </div>
               <div className="row" style={{ marginTop: 8 }}>

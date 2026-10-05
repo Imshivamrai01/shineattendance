@@ -1,6 +1,6 @@
-import { after } from 'next/server';
-import { M, getSettings } from './db.js';
-import { sendMail, layout, appUrl, mailConfigured } from './mailer.js';
+import { M, getSettings, defer } from './db.js';
+import { sendMail, layout, appUrl, mailConfigured, esc } from './mailer.js';
+import { taskLabel, taskScore } from './taskScore.js';
 import { dateKey } from './dates.js';
 import { dayFlags, hoursCfg, label12, minutesText } from './hours.js';
 
@@ -26,7 +26,7 @@ function queue(label, fn) {
       await M.Setting.updateOne({ key: 'system' }, { $set: { lastMailError: `${label}: ${String(e.message).slice(0, 300)}`, lastMailErrorAt: new Date() } }).catch(() => {});
     }
   };
-  try { after(run); } catch { run(); }
+  defer(run);
 }
 
 // ---------- recipients ----------
@@ -107,14 +107,19 @@ export function notifyCheckin({ userId, recId, at, distance }) {
   });
 }
 
-export function notifyCheckout({ userId, recId, at, auto = false, distance }) {
+export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = false, distance }) {
   queue('check-out', async () => {
     const [u, rec, cfg] = await Promise.all([M.User.findById(userId).select('name email employeeId').lean(), M.Attendance.findById(recId).lean(), getSettings()]);
     if (!u || !rec) return;
     const hrs = hoursOf(rec);
     const f = dayFlags(rec, cfg);
     const c = hoursCfg(cfg);
-    const m = auto
+    const m = endOfDay
+      ? layout({
+        tone: 'info', title: 'Checked out at office closing', greeting: `Hi ${nameOf(u)},`, intro: `Office hours ended at ${label12(c.workEnd)}, so you were checked out automatically.`,
+        highlight: `Out at ${fmtTime(at)}`, rows: [['Date', fmtDay(at)], ['Total hours today', hm(hrs)]], link: link('/attendance'), linkText: 'View my attendance',
+      })
+      : auto
       ? layout({
         tone: 'warn', title: 'You were checked out automatically', greeting: `Hi ${nameOf(u)},`, intro: `You moved ${distance ?? 'more than 20'} m away from the office, so your attendance was closed at ${fmtTime(at)}.`,
         highlight: `Out at ${fmtTime(at)}`, rows: [['Date', fmtDay(at)], ['Hours so far today', hm(hrs)]],
@@ -125,7 +130,7 @@ export function notifyCheckout({ userId, recId, at, auto = false, distance }) {
         rows: [['Date', fmtDay(at)], ['Total hours today', hm(hrs)], ['Office ends', label12(c.workEnd)]],
         notes: f.early ? [`You left ${minutesText(f.earlyMinutes)} before the office end time (${label12(c.workEnd)}).`] : [], link: link('/attendance'), linkText: 'View my attendance',
       });
-    await sendMail({ to: u.email, subject: auto ? 'You were checked out automatically (left the office)' : `Checked out at ${fmtTime(at)}`, ...m });
+    await sendMail({ to: u.email, subject: endOfDay ? `Checked out at office closing (${fmtTime(at)})` : auto ? 'You were checked out automatically (left the office)' : `Checked out at ${fmtTime(at)}`, ...m });
     const lead = await everyCheckinRecipients(u);
     if (lead.length) {
       const l = layout({ tone: auto ? 'warn' : 'info', title: `${u.name} ${auto ? 'left the office' : 'checked out'}`, intro: `${idOf(u)} ${auto ? 'was checked out automatically' : 'checked out'} at ${fmtTime(at)}. Hours today: ${hm(hrs)}.`, link: link('/attendance'), linkText: 'Open attendance' });
@@ -156,10 +161,7 @@ export function notifyAttendanceChange({ kind, recId, actor, reason, oldData, ne
     const by = actor ? `${actor.name || ROLE[actor.role]} (${ROLE[actor.role] || actor.role})` : 'An administrator';
     const rows = [['Employee', idOf(rec.user)], ['Date', dayLabel(rec.date)], ['Before', show(oldData)], ['After', show(newData)], ['Changed by', by], ['Reason', reason]];
     const word = kind === 'voided' ? 'voided' : 'corrected';
-    await sendMail({
-      to: rec.user.email, subject: `Your attendance for ${rec.date} was ${word}`,
-      ...layout({ tone: 'warn', title: `Your attendance was ${word}`, greeting: `Hi ${nameOf(rec.user)},`, intro: `${by} ${word === 'voided' ? 'voided' : 'corrected'} your attendance for ${dayLabel(rec.date)}.`, rows, link: link('/attendance'), linkText: 'View my attendance' }),
-    });
+    // Employees only get check-in / check-out mail; they see corrections in the app.
     await sendMail({
       to: await leadership([actor?.email]), subject: `Attendance ${word}: ${rec.user.name} (${rec.date})`,
       ...layout({ tone: 'warn', title: `Attendance ${word}`, intro: `${by} ${word} the attendance of ${rec.user.name} on ${dayLabel(rec.date)}.`, rows, link: link('/attendance'), linkText: 'Open attendance' }),
@@ -169,27 +171,6 @@ export function notifyAttendanceChange({ kind, recId, actor, reason, oldData, ne
 
 // ---------- 3. Requests and changes ----------
 const changeRows = (changes) => Object.entries(changes || {}).map(([k, v]) => [LBL[k] || k, val(v)]);
-
-/** A request was just submitted: confirm to the person it is about (and who raised it). */
-export function notifySubmitted(reqId) {
-  queue('request submitted', async () => {
-    const r = await M.ChangeRequest.findById(reqId).populate('requester', 'name email role').populate('subject', 'name email employeeId').lean();
-    if (!r) return;
-    const waiting = STAGE[r.status] || 'approval';
-    const same = String(r.requester._id) === String(r.subject._id);
-    const rows = [['Type', TYPE[r.type]], ['For', idOf(r.subject)], ...(r.type === 'PROFILE_CHANGE' ? changeRows(r.changes) : []), ['Reason', r.reason], ['Waiting for', waiting]];
-    await sendMail({
-      to: r.requester.email, subject: `Your ${TYPE[r.type]} request was submitted`,
-      ...layout({ tone: 'info', title: 'Request submitted', greeting: `Hi ${nameOf(r.requester)},`, intro: `Your ${TYPE[r.type]} request${same ? '' : ` for ${r.subject.name}`} is now waiting for ${waiting}. You will get an email when it is decided.`, rows, link: link('/requests'), linkText: 'View request' }),
-    });
-    if (!same && r.subject.email) {
-      await sendMail({
-        to: r.subject.email, subject: `A ${TYPE[r.type]} was requested for you`,
-        ...layout({ tone: 'info', title: `A ${TYPE[r.type]} was requested for you`, greeting: `Hi ${nameOf(r.subject)},`, intro: `${r.requester.name} (${ROLE[r.requester.role]}) requested this. It is waiting for ${waiting}.`, rows, link: link('/requests'), linkText: 'View request' }),
-      });
-    }
-  });
-}
 
 /** A request is now waiting on someone: tell that approver. */
 export function notifyPending(reqId) {
@@ -209,7 +190,7 @@ export function notifyPending(reqId) {
   });
 }
 
-/** Approved or rejected: the requester, the employee it is about, and Admin + COO. */
+/** Approved or rejected: Admin + COO (the requester and employee see the outcome in the app). */
 export function notifyDecision(reqId) {
   queue('request decision', async () => {
     const r = await M.ChangeRequest.findById(reqId).populate('requester', 'name email role').populate('subject', 'name email employeeId').lean();
@@ -219,14 +200,6 @@ export function notifyDecision(reqId) {
     const word = ok ? 'approved' : 'rejected';
     const by = last?.byRole ? ROLE[last.byRole] || last.byRole : 'a reviewer';
     const rows = [['Type', TYPE[r.type]], ['For', idOf(r.subject)], ...(r.type === 'PROFILE_CHANGE' ? changeRows(r.changes) : []), ['Reason', r.reason], ['Decision', `${word} by ${by}${last?.override ? ' (Admin override)' : ''}`], ...(last?.note ? [['Note', last.note]] : [])];
-    const same = String(r.requester._id) === String(r.subject._id);
-    const person = (u, intro) => ({
-      to: u.email, subject: `${ok ? 'Approved' : 'Rejected'}: ${TYPE[r.type]}`,
-      ...layout({ tone: ok ? 'ok' : 'bad', title: `Request ${word}`, greeting: `Hi ${nameOf(u)},`, intro, rows, link: link(r.type === 'PROFILE_CHANGE' ? '/profile' : '/attendance'), linkText: 'Open app' }),
-    });
-    const detail = ok && r.type === 'PROFILE_CHANGE' ? ' The details are now updated.' : '';
-    await sendMail(person(r.requester, same ? `Your ${TYPE[r.type]} has been ${word}.${detail}` : `The ${TYPE[r.type]} you requested for ${r.subject.name} has been ${word}.${detail}`));
-    if (!same) await sendMail(person(r.subject, `The ${TYPE[r.type]} requested for you has been ${word}.${detail}`));
     await sendMail({
       to: await leadership([r.requester.email, r.subject.email]), subject: `${ok ? 'Approved' : 'Rejected'}: ${TYPE[r.type]} for ${r.subject.name}`,
       ...layout({ tone: ok ? 'ok' : 'bad', title: `Request ${word}`, intro: `${TYPE[r.type][0].toUpperCase()}${TYPE[r.type].slice(1)} for ${r.subject.name}, raised by ${r.requester.name}, was ${word} by ${by}.`, rows, link: link('/requests'), linkText: 'Open requests' }),
@@ -234,20 +207,13 @@ export function notifyDecision(reqId) {
   });
 }
 
-/** Details changed directly (Admin/COO/Manager edit): tell the employee and Admin + COO. `fields` = [[field, old, new]] */
+/** Details changed directly (Admin/COO/Manager edit): tell Admin + COO. `fields` = [[field, old, new]] */
 export function notifyProfileChanged({ userId, actor, fields, reason }) {
   queue('profile changed', async () => {
     const u = await M.User.findById(userId).select('name email employeeId role').lean();
     if (!u || !fields?.length) return;
     const by = actor ? `${actor.name || ROLE[actor.role]} (${ROLE[actor.role] || actor.role})` : 'An administrator';
     const rows = [['Employee', idOf(u)], ...fields.map(([f, o, n]) => [LBL[f] || f, `${val(o)}  →  ${val(n)}`]), ['Changed by', by], ['Reason', reason]];
-    const onlyStatus = fields.every(([f]) => f === 'status');
-    if (!onlyStatus) {
-      await sendMail({
-        to: u.email, subject: 'Your details were updated',
-        ...layout({ tone: 'info', title: 'Your details were updated', greeting: `Hi ${nameOf(u)},`, intro: `${by} updated your profile. If something looks wrong, contact HR.`, rows, link: link('/profile'), linkText: 'View my profile' }),
-      });
-    }
     await sendMail({
       to: await leadership([actor?.email, u.email]), subject: `Profile updated: ${u.name}`,
       ...layout({ tone: 'info', title: `Profile updated: ${u.name}`, intro: `${by} changed ${idOf(u)}.`, rows, link: link(`/users/${u._id}`), linkText: 'Open profile' }),
@@ -264,79 +230,76 @@ export function notifyLockout({ userId, ip }) {
       to: await adminRecipients(), subject: `Account locked: ${u.name}`,
       ...layout({ tone: 'bad', title: `Account locked: ${u.name}`, intro: 'There were 5 wrong password attempts, so the account is locked for 15 minutes.', rows: [['Account', `${idOf(u)} · ${ROLE[u.role]}`], ['From IP', ip || 'unknown']], link: link('/admin/audit-logs'), linkText: 'Open audit logs' }),
     });
-    if (u.email) {
-      await sendMail({
-        to: u.email, subject: 'Your Shine Attendance account was locked',
-        ...layout({ tone: 'bad', title: 'Your account is locked for 15 minutes', greeting: `Hi ${nameOf(u)},`, intro: 'Someone entered a wrong password 5 times. If that was not you, tell your Admin.', notes: ['You can try again in 15 minutes, or ask an Admin to reset your password.'] }),
-      });
-    }
   });
 }
 
-// ---------- 5. Scheduled: morning absent check, evening summary ----------
-const isSunday = (key) => new Date(`${key}T00:00:00Z`).getUTCDay() === 0;
+// ---------- 5. Scheduled: evening report (only to the report address) ----------
+const TD = 'padding:8px 10px;border-top:1px solid #e6e9f1;vertical-align:top;font-size:13px';
+const TH = 'padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7489;background:#fafbfe';
+const sessionText = (s) => `${fmtTime(s.checkIn)} – ${s.checkOut ? fmtTime(s.checkOut) : 'still in'}${s.autoCheckout ? ' (left office)' : s.endOfDay ? ' (office closed)' : ''}${s.corrected ? ' (corrected)' : ''}`;
 
-/** Late-morning job: email each person who has not checked in, and a digest of absentees to those who oversee them. */
-export async function sendAbsentAlerts() {
-  const today = dateKey();
-  if (isSunday(today)) return { date: today, skipped: 'Sunday (weekly off)' };
-  const s = await getSettings();
-  if (s.lastAbsentMailDate === today) return { date: today, skipped: 'already sent today' };
-  await M.Setting.updateOne({ key: 'system' }, { $set: { lastAbsentMailDate: today } });
-
-  const people = await M.User.find({ status: 'ACTIVE', role: { $ne: 'ADMIN' } }).select('name email employeeId role department hr').lean();
-  const present = new Set((await M.Attendance.find({ date: today, status: 'ACTIVE', user: { $in: people.map((p) => p._id) } }).select('user').lean()).map((r) => String(r.user)));
-  const absent = people.filter((p) => !present.has(String(p._id)));
-  let personal = 0;
-  for (const p of absent) {
-    if (!p.email) continue;
-    await sendMail({
-      to: p.email, subject: `You have not checked in today (${today})`,
-      ...layout({ tone: 'warn', title: 'You have not checked in yet', greeting: `Hi ${nameOf(p)},`, intro: `We have no attendance for you on ${dayLabel(today)}; office starts at ${label12(hoursCfg(s).workStart)}. If you are at the office, please check in. If you are on leave or working elsewhere, tell your manager or HR.`, link: link('/'), linkText: 'Check in now' }),
-    });
-    personal++;
-  }
-
-  const list = (arr) => (arr.length ? arr.slice(0, 40).map((p) => idOf(p)).join(', ') + (arr.length > 40 ? ` and ${arr.length - 40} more` : '') : 'None');
-  const digest = async (to, arr, who) => {
-    if (!to.length) return;
-    await sendMail({
-      to, subject: `Absent so far today: ${arr.length}`,
-      ...layout({ tone: arr.length ? 'warn' : 'ok', title: `${arr.length} not checked in yet (${today})`, intro: `${who}. ${arr.length ? 'These people have no attendance yet today.' : 'Everyone has checked in.'}`, rows: [['Not checked in', list(arr)]], link: link('/attendance'), linkText: 'Open attendance' }),
-    });
-  };
-  await digest(await leadership(), absent, 'Everyone in the company');
-  // Managers oversee all HR and Employees; each HR oversees their own people and department.
-  const managers = await M.User.find({ status: 'ACTIVE', role: 'MANAGER', email: { $ne: null } }).select('email').lean();
-  const mAbsent = absent.filter((p) => ['HR', 'EMPLOYEE'].includes(p.role));
-  for (const m of managers) await digest([m.email], mAbsent, 'Everyone under you');
-  const hrs = await M.User.find({ status: 'ACTIVE', role: 'HR', email: { $ne: null } }).select('email department').lean();
-  for (const h of hrs) {
-    const mine = absent.filter((p) => p.role === 'EMPLOYEE' && (String(p.hr) === String(h._id) || (h.department && String(p.department) === String(h.department))));
-    if (mine.length) await digest([h.email], mine, 'Your people');
-  }
-  return { date: today, absent: absent.length, personalEmails: personal };
-}
-
-/** End-of-day summary to Admin + COO. */
-export async function sendDailySummary() {
-  const today = dateKey();
-  const people = await M.User.find({ status: 'ACTIVE', role: { $ne: 'ADMIN' } }).select('name employeeId role').lean();
-  const recs = await M.Attendance.find({ date: today, status: 'ACTIVE', user: { $in: people.map((p) => p._id) } }).lean();
-  const present = new Set(recs.map((r) => String(r.user)));
-  const absent = people.filter((p) => !present.has(String(p._id)));
-  const outside = recs.filter((r) => r.sessions.some((x) => x.inGeo?.verified === false)).length;
-  const auto = recs.filter((r) => r.sessions.some((x) => x.autoCheckout)).length;
-  const totalHrs = Math.round(recs.reduce((a, r) => a + hoursOf(r), 0) * 100) / 100;
+/** Detailed day report: who came, when they came and left, hours, flags and task status. */
+export async function sendDailyReport(date = dateKey()) {
   const cfg = await getSettings();
-  const late = recs.filter((r) => dayFlags(r, cfg).late).length;
-  const pending = await M.ChangeRequest.countDocuments({ status: { $in: ['PENDING_HR', 'PENDING_MANAGER', 'PENDING_COO', 'PENDING_ADMIN'] } });
-  const list = absent.slice(0, 40).map((p) => idOf(p)).join(', ') + (absent.length > 40 ? ` and ${absent.length - 40} more` : '');
-  const m = layout({
-    tone: 'info', title: `Attendance summary: ${dayLabel(today)}`, intro: `${present.size} of ${people.length} people were present today.`,
-    rows: [['Present', present.size], ['Absent', absent.length ? list : 'None'], ['Checked in late', late], ['Total hours worked', hm(totalHrs)], ['Check-ins outside the geofence', outside], ['Left the office (auto check-out)', auto], ['Requests waiting for approval', pending]],
-    link: link('/'), linkText: 'Open dashboard',
+  const people = await M.User.find({ status: 'ACTIVE', role: { $ne: 'ADMIN' } }).select('name employeeId role designation').populate('department', 'name').sort({ name: 1 }).lean();
+  const ids = people.map((p) => p._id);
+  const [recs, tasks] = await Promise.all([
+    M.Attendance.find({ date, status: 'ACTIVE', user: { $in: ids } }).lean(),
+    M.Task.find({ date, user: { $in: ids } }).sort({ createdAt: 1 }).lean(),
+  ]);
+  const recOf = Object.fromEntries(recs.map((r) => [String(r.user), r]));
+  const tasksOf = {};
+  for (const t of tasks) (tasksOf[String(t.user)] ||= []).push(t);
+
+  let late = 0, early = 0, left = 0, closed = 0, totalHrs = 0;
+  const lines = people.map((p) => {
+    const r = recOf[String(p._id)];
+    const ts = tasksOf[String(p._id)] || [];
+    const taskLine = ts.length ? `${ts.reduce((a, t) => a + taskScore(t), 0)}/${ts.length} done` : '—';
+    const taskList = ts.map((t) => `${t.title}: ${taskLabel(t)}${t.note ? ` (${t.note})` : ''}`);
+    if (!r) return { p, present: false, taskLine, taskList };
+    const f = dayFlags(r, cfg);
+    const hrs = hoursOf(r);
+    totalHrs += hrs;
+    if (f.late) late++;
+    if (f.early) early++;
+    if (r.sessions.some((s) => s.autoCheckout)) left++;
+    if (r.sessions.some((s) => s.endOfDay)) closed++;
+    const notes = [
+      f.late && `Late ${minutesText(f.lateMinutes)}`, f.early && `Left ${minutesText(f.earlyMinutes)} early`,
+      r.sessions.some((s) => s.inGeo?.verified === false) && 'Check-in outside office',
+      ...r.sessions.filter((s) => s.reentryReason).map((s) => `Came back ${fmtTime(s.checkIn)}: ${s.reentryReason}`),
+    ].filter(Boolean);
+    return { p, present: true, first: r.sessions[0]?.checkIn, last: r.sessions.filter((s) => s.checkOut).at(-1)?.checkOut, hrs, sessions: r.sessions.map(sessionText), notes, taskLine, taskList };
   });
-  const r = await sendMail({ to: await leadership(), subject: `Attendance summary ${today}: ${present.size}/${people.length} present`, ...m });
-  return { date: today, present: present.size, total: people.length, ...r };
+  const present = lines.filter((l) => l.present);
+  const absent = lines.filter((l) => !l.present);
+  const doneTasks = tasks.reduce((a, t) => a + taskScore(t), 0);
+  const lateTasks = tasks.filter((t) => t.late).length;
+
+  const cell = (v) => `<td style="${TD}">${v}</td>`;
+  const list = (arr) => arr.map(esc).join('<br>');
+  const row = (l, i) => `<tr>${cell(i + 1)}${cell(`<b>${esc(l.p.name)}</b><br><span style="color:#6b7489">${esc([l.p.employeeId, l.p.designation || ROLE[l.p.role], l.p.department?.name].filter(Boolean).join(' · '))}</span>`)}`
+    + (l.present
+      ? `${cell('<span style="color:#0d6a49;font-weight:600">Present</span>')}${cell(esc(fmtTime(l.first)))}${cell(esc(l.last ? fmtTime(l.last) : 'still in'))}${cell(esc(hm(l.hrs)))}${cell(list(l.sessions))}${cell(list(l.notes) || '—')}`
+      : `${cell('<span style="color:#9c2a22;font-weight:600">Absent</span>')}${cell('—')}${cell('—')}${cell('—')}${cell('—')}${cell('—')}`)
+    + `${cell(`<b>${esc(l.taskLine)}</b>${l.taskList.length ? `<br>${list(l.taskList)}` : ''}`)}</tr>`;
+  const table = `<div style="overflow-x:auto;margin:18px 0"><table role="presentation" cellpadding="0" cellspacing="0" style="border:1px solid #e6e9f1;border-radius:12px;border-collapse:separate;width:100%;min-width:720px">
+<tr>${['#', 'Employee', 'Status', 'In', 'Out', 'Hours', 'Sessions', 'Notes', 'Tasks'].map((h) => `<th style="${TH}">${h}</th>`).join('')}</tr>
+${[...present, ...absent].map(row).join('\n')}</table></div>`;
+  const text = [...present, ...absent].map((l) => l.present
+    ? `${l.p.name}: in ${fmtTime(l.first)}, out ${l.last ? fmtTime(l.last) : 'still in'}, ${hm(l.hrs)}. ${[...l.sessions, ...l.notes].join('; ')}. Tasks ${l.taskLine}`
+    : `${l.p.name}: ABSENT. Tasks ${l.taskLine}`).join('\n');
+
+  const m = layout({
+    tone: 'info', wide: true, title: `Daily attendance report: ${dayLabel(date)}`,
+    intro: `${present.length} of ${people.length} people were present. Office hours ${label12(hoursCfg(cfg).workStart)} to ${label12(hoursCfg(cfg).workEnd)}.`,
+    rows: [['Present', present.length], ['Absent', absent.length ? absent.map((l) => l.p.name).join(', ') : 'None'], ['Came late', late], ['Left early', early],
+      ['Left the office (auto check-out)', left], ['Checked out at office closing', closed], ['Total hours worked', hm(totalHrs)],
+      ['Tasks done on time', `${doneTasks} of ${tasks.length}`], ['Late submissions (score 0)', lateTasks]],
+    extraHtml: table, extraText: text, link: link('/attendance'), linkText: 'Open attendance',
+  });
+  const to = process.env.REPORT_EMAIL ? [process.env.REPORT_EMAIL] : await adminRecipients();
+  const r = await sendMail({ to, subject: `Attendance report ${date}: ${present.length}/${people.length} present`, ...m });
+  return { date, present: present.length, total: people.length, tasks: tasks.length, ...r };
 }

@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtTime, fmtDateTime } from '@/lib/client';
 import { useMe } from '@/components/Shell';
@@ -7,6 +7,7 @@ import { Badge, Skeleton } from '@/components/ui';
 import CameraCapture from '@/components/CameraCapture';
 import { label12, minutesText } from '@/lib/hours';
 import { quoteOfTheDay } from '@/lib/quotes';
+import { taskTone } from '@/lib/taskScore';
 
 // Phone GPS improves over the first seconds. Watch for up to `ms`, keep the most accurate fix,
 // and stop early once a fix is good enough.
@@ -53,30 +54,27 @@ function AttendanceCard({ data, reload }) {
       await api(`/attendance/${kind}`, { method: 'POST', body: { ...pos, photo, reason: data.today.needsReason ? reason : undefined } });
       setReason('');
       setMsg({ ok: true, text: kind === 'check-in' ? 'Checked in' : 'Checked out' });
+      window.dispatchEvent(new Event('attendance:changed')); // start / stop location tracking now
       reload();
     } catch (e) { setMsg({ text: e.message }); }
     setBusy(false);
   };
   const t = data.today;
   const [away, setAway] = useState(false);
-  const last = useRef(null);
 
-  // While checked in, keep reporting position. Leaving the office radius checks the user out automatically.
+  // Position tracking runs app-wide (LocationGuard in the Shell); show what it finds here.
   useEffect(() => {
-    if (!t.checkedIn || !navigator.geolocation) return;
-    const id = navigator.geolocation.watchPosition(
-      (p) => { last.current = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }; },
-      () => { last.current = null; }, { enableHighAccuracy: true, maximumAge: 5000 });
-    const timer = setInterval(async () => {
-      if (!last.current) return;
-      try {
-        const r = await api('/attendance/ping', { method: 'POST', body: last.current });
-        setAway(!!r.warning);
-        if (r.autoCheckedOut) { setMsg({ text: 'You moved away from the office (' + r.distance + ' m) so you were checked out automatically.' }); reload(); }
-      } catch { /* ignore transient errors */ }
-    }, 10000);
-    return () => { navigator.geolocation.clearWatch(id); clearInterval(timer); };
-  }, [t.checkedIn, reload]);
+    const onPing = (e) => {
+      const r = e.detail || {};
+      setAway(!!r.warning);
+      if (r.autoCheckedOut) {
+        setMsg({ text: r.endOfDay ? 'Office hours are over, so you were checked out automatically.' : `You moved away from the office (${r.distance} m) so you were checked out automatically.` });
+        reload();
+      }
+    };
+    window.addEventListener('attendance:ping', onPing);
+    return () => window.removeEventListener('attendance:ping', onPing);
+  }, [reload]);
   return (
     <div className="card">
       {cam && <CameraCapture title={cam.kind === 'check-in' ? 'Photo for check-in' : 'Photo for check-out'} onDone={closeCam} onCancel={() => closeCam(null)} />}
@@ -85,7 +83,7 @@ function AttendanceCard({ data, reload }) {
           <h2>Today · {t.date}</h2>
           <div className="muted small">
             {t.location ? `Assigned location: ${t.location.name} (check in within ${t.location.radiusMeters} m)` : 'No location assigned: check-in works at any office location.'}
-            {data.office && <div>Office hours: {label12(data.office.workStart)} to {label12(data.office.workEnd)}</div>}
+            {data.office && <div>Office hours: {label12(data.office.workStart)} to {label12(data.office.workEnd)} · everyone still checked in is checked out at {label12(data.office.workEnd)}</div>}
           </div>
         </div>
         <div className="row">
@@ -114,6 +112,24 @@ function AttendanceCard({ data, reload }) {
           ))}</tbody></table></div>
       )}
       <div className="muted small" style={{ marginTop: 8 }}>Hours today: {t.hours}</div>
+    </div>
+  );
+}
+
+function TodayTasks() {
+  const [d, setD] = useState(null);
+  useEffect(() => { api('/tasks?mine=1').then(setD).catch(() => {}); }, []);
+  if (!d || !d.tasks.length) return null;
+  const score = d.tasks.reduce((a, t) => a + t.score, 0);
+  return (
+    <div className="card">
+      <div className="row between"><h2>Today&apos;s tasks</h2><Link className="small" href="/tasks">View all</Link></div>
+      {d.tasks.map((t) => (
+        <div key={t._id} className="row between" style={{ padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{t.title}</span><Badge tone={taskTone(t)}>{t.label}</Badge>
+        </div>
+      ))}
+      <div className="muted small" style={{ marginTop: 6 }}>Score today: {score}/{d.tasks.length}</div>
     </div>
   );
 }
@@ -166,7 +182,7 @@ function Person({ name, sub, right, photo }) {
         <div className="li-name">{name}</div>
         <div className="muted small">{sub}</div>
       </div>
-      <div className="row" style={{ gap: 6 }}>{right}</div>
+      <div className="row li-tags">{right}</div>
     </div>
   );
 }
@@ -315,6 +331,7 @@ export default function Dashboard() {
         <figcaption>{quote.author}</figcaption>
       </figure>
       {!isAdmin && <AttendanceCard data={d} reload={load} />}
+      {!isAdmin && <TodayTasks />}
       {d.overview && <Overview me={me} d={d} />}
       {isAdmin && <Checklist items={d.checklist} />}
       {!isAdmin && <Completion c={d.completion} />}

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 const point = new Schema({
-  lat: Number, lng: Number, distance: Number,
+  lat: Number, lng: Number, distance: Number, accuracy: Number,
   verified: Boolean, // inside geofence of the assigned location
 }, { _id: false });
 const session = new Schema({
@@ -10,6 +10,7 @@ const session = new Schema({
   inGeo: point, outGeo: point,
   corrected: { type: Boolean, default: false },
   autoCheckout: { type: Boolean, default: false },
+  endOfDay: { type: Boolean, default: false }, // closed automatically at office closing time
   reentryReason: String, // why the user came back after leaving the premises
   inPhoto: { type: new Schema({ publicId: String, version: Number }, { _id: false }) },
   outPhoto: { type: new Schema({ publicId: String, version: Number }, { _id: false }) },

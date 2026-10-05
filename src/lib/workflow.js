@@ -3,7 +3,7 @@ import { audit } from './audit.js';
 import { bad, forbidden, notFound, requireReason, HttpError } from './http.js';
 import { applyUserChanges, canManage, normalizeChanges } from './users.js';
 import { correctAttendance } from './attendance.js';
-import { notifyPending, notifyDecision, notifySubmitted } from './notify.js';
+import { notifyPending, notifyDecision } from './notify.js';
 import { EMPLOYEE_REQUESTABLE, PROFILE_FIELDS } from './constants.js';
 
 const activeUser = (id) => (id ? M.User.findOne({ _id: id, status: 'ACTIVE' }).lean() : null);
@@ -56,19 +56,24 @@ export async function createRequest(ctx, { type, subjectId, changes, payload, re
     action: 'SUBMITTED_REQUEST', entityType: 'ChangeRequest', entityId: r._id, subjectId: subject._id,
     department: subject.department, location: subject.location, newData: { type, ...data, status }, reason,
   });
-  notifySubmitted(r._id);
   notifyPending(r._id);
   return r;
 }
+
+// Authority runs Admin > COO > Manager > HR: each role decides its own stage and may also decide any stage below it.
+const OWN_STAGE = { ADMIN: 'PENDING_ADMIN', COO: 'PENDING_COO', MANAGER: 'PENDING_MANAGER', HR: 'PENDING_HR' };
 
 /** Which requests can this user act on right now? */
 export function canActOn(actor, r, subject) {
   if (['APPROVED', 'REJECTED'].includes(r.status)) return false;
   if (String(r.requester) === String(actor._id) && actor.role !== 'ADMIN') return false;
   if (actor.role === 'ADMIN') return true;
+  if (actor.role === 'COO') return ['PENDING_COO', 'PENDING_MANAGER', 'PENDING_HR'].includes(r.status);
+  if (actor.role === 'MANAGER') {
+    if (r.status === 'PENDING_MANAGER') return String(subject?.manager) === String(actor._id);
+    return r.status === 'PENDING_HR' && !!subject && canManage(actor, subject); // a Manager oversees every HR and Employee
+  }
   if (actor.role === 'HR') return r.status === 'PENDING_HR' && String(subject?.hr) === String(actor._id);
-  if (actor.role === 'MANAGER') return r.status === 'PENDING_MANAGER' && String(subject?.manager) === String(actor._id);
-  if (actor.role === 'COO') return ['PENDING_COO', 'PENDING_MANAGER'].includes(r.status);
   return false;
 }
 
@@ -91,9 +96,10 @@ export async function reviewRequest(ctx, id, { decision, note }) {
   if (!['approve', 'reject'].includes(decision)) throw bad('Decision must be approve or reject');
   if (decision === 'reject') note = requireReason(note, 3);
 
-  // Admin acting on a stage that belongs to someone else is an override.
-  const override = actor.role === 'ADMIN' && r.status !== 'PENDING_ADMIN';
-  if (override) note = requireReason(note, 5);
+  // Deciding a stage that belongs to a lower role is an override: it is final and recorded as such. Admin must say why.
+  const ownManagerStage = r.status === 'PENDING_MANAGER' && String(subject?.manager) === String(actor._id); // a COO can be someone's manager
+  const override = r.status !== OWN_STAGE[actor.role] && !ownManagerStage;
+  if (override && actor.role === 'ADMIN') note = requireReason(note, 5);
 
   const before = r.status;
   if (decision === 'reject') {
@@ -114,7 +120,7 @@ export async function reviewRequest(ctx, id, { decision, note }) {
   });
   if (override) {
     await audit(ctx, {
-      action: 'ADMIN_OVERRIDE', raw: true, entityType: 'ChangeRequest', entityId: r._id, subjectId: r.subject,
+      action: `${actor.role}_OVERRIDE`, raw: true, entityType: 'ChangeRequest', entityId: r._id, subjectId: r.subject,
       department: subject?.department, location: subject?.location,
       oldData: { status: before }, newData: { status: r.status, decision }, reason: note, override: true,
     });

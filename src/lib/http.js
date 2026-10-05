@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
-import { connect } from './db.js';
+import { connect, withDb } from './db.js';
 import { getAuthUser } from './auth.js';
 
 import { HttpError, bad, forbidden, notFound } from './errors.js';
@@ -30,7 +30,7 @@ export function oid(v, label = 'id') {
  * `allowPasswordChange`: let users with mustChangePassword through (auth routes only).
  */
 export function handler(fn, { roles = null, allowPasswordChange = false } = {}) {
-  return async (req, routeCtx) => {
+  return (req, routeCtx) => withDb(async () => {
     const rid = crypto.randomUUID();
     try {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -66,7 +66,7 @@ export function handler(fn, { roles = null, allowPasswordChange = false } = {}) 
       console.error(`[${rid}]`, e);
       return NextResponse.json({ error: 'Internal server error', requestId: rid }, { status: 500 });
     }
-  };
+  });
 }
 
 export async function readJson(req) {

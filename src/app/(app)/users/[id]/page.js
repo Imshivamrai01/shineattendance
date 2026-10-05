@@ -3,8 +3,10 @@ import { use, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtDateTime, show, takeFlash } from '@/lib/client';
 import { useMe } from '@/components/Shell';
-import { Badge, ConfirmModal, TempPassword, statusTone, Skeleton } from '@/components/ui';
+import { ConfirmModal, TempPassword, Skeleton } from '@/components/ui';
 import AttendanceHistory from '@/components/AttendanceHistory';
+import ProfileCard from '@/components/ProfileCard';
+import TaskHistory from '@/components/TaskHistory';
 
 const ALL = ['name', 'email', 'mobile', 'fatherName', 'motherName', 'dob', 'address', 'city', 'state', 'pincode', 'emergencyContact1', 'emergencyContact2',
   'designation', 'joiningDate', 'employeeType', 'department', 'manager', 'hr', 'location', 'employeeId'];
@@ -45,41 +47,38 @@ export default function UserDetail({ params }) {
   const setStatus = (status) => setModal({ kind: 'status', status });
   return (
     <>
-      <div className="row between" style={{ marginBottom: 14 }}>
-        <div>
-          <h1>{u.name} <Badge tone={statusTone(u.status)}>{u.status}</Badge></h1>
-          <div className="muted">{u.role}{u.employeeId ? ` · ${u.employeeId}` : ''}</div>
-        </div>
-        <div className="row">
-          {isAdmin && <Link className="btn primary" href={`/users/${id}/edit`}>Edit</Link>}
-          {canManagerEdit && <Link className="btn primary" href={`/users/${id}/edit?mode=direct`}>Edit assignment</Link>}
-          {canHrRequest && <Link className="btn" href={`/users/${id}/edit?mode=request`}>{me.role === 'MANAGER' ? 'Request profile change (to COO)' : me.role === 'COO' ? 'Request profile change (to Admin)' : 'Request profile change'}</Link>}
-          {isAdmin && u.role !== 'ADMIN' && (u.status === 'ACTIVE'
-            ? <button className="btn" onClick={() => setStatus('INACTIVE')}>Deactivate</button>
-            : <button className="btn" onClick={() => setStatus('ACTIVE')}>Reactivate</button>)}
-          {isAdmin && u.role !== 'ADMIN' && <button className="btn" onClick={() => setModal({ kind: 'reset' })}>Reset password</button>}
-          {isAdmin && u.role !== 'ADMIN' && u.status !== 'ARCHIVED' && <button className="btn danger" onClick={() => setModal({ kind: 'delete' })}>Delete</button>}
-        </div>
-      </div>
       {note && <div className="alert ok">{note}</div>}
       {u.statusReason && u.status !== 'ACTIVE' && <div className="alert warn">Reason recorded: {u.statusReason}</div>}
+      <ProfileCard user={u} canChangePhoto={isAdmin && d.photosEnabled} onChanged={load}>
+        {isAdmin && <Link className="btn primary" href={`/users/${id}/edit`}>Edit</Link>}
+        {canManagerEdit && <Link className="btn primary" href={`/users/${id}/edit?mode=direct`}>Edit assignment</Link>}
+        {canHrRequest && <Link className="btn" href={`/users/${id}/edit?mode=request`}>{me.role === 'MANAGER' ? 'Request profile change (to COO)' : me.role === 'COO' ? 'Request profile change (to Admin)' : 'Request profile change'}</Link>}
+        {isAdmin && u.role !== 'ADMIN' && (u.status === 'ACTIVE'
+          ? <button className="btn" onClick={() => setStatus('INACTIVE')}>Deactivate</button>
+          : <button className="btn" onClick={() => setStatus('ACTIVE')}>Reactivate</button>)}
+        {isAdmin && u.role !== 'ADMIN' && <button className="btn" onClick={() => setModal({ kind: 'reset' })}>Reset password</button>}
+        {isAdmin && u.role !== 'ADMIN' && u.status !== 'ARCHIVED' && <button className="btn danger" onClick={() => setModal({ kind: 'delete' })}>Delete</button>}
+      </ProfileCard>
 
-      <div className="card">
-        <div className="row between"><h2>Profile completion</h2><b>{u.completion.percent}%</b></div>
-        <div className="bar"><i style={{ width: `${u.completion.percent}%` }} /></div>
-        {u.completion.missing.length > 0 && <p className="muted small">Missing: {u.completion.missing.join(', ')}</p>}
-      </div>
+      {u.completion.percent < 100 && (
+        <div className="card">
+          <div className="row between"><h2>Profile completion</h2><b>{u.completion.percent}%</b></div>
+          <div className="bar"><i style={{ width: `${u.completion.percent}%` }} /></div>
+          <p className="muted small">Missing: {u.completion.missing.join(', ')}</p>
+        </div>
+      )}
 
       <div className="card scroll">
         <h2>Details</h2>
-        <table><tbody>
+        <table className="kv"><tbody>
           {ALL.map((k) => (
-            <tr key={k}><td className="muted" style={{ width: 200 }}>{LABELS[k]}</td>
+            <tr key={k}><td className="muted">{LABELS[k]}</td>
               <td>{disp(k, u) === 'Not Provided' ? <span className="muted">Not Provided</span> : disp(k, u)}</td></tr>
           ))}
         </tbody></table>
       </div>
 
+      {u.role !== 'ADMIN' && <TaskHistory userId={id} />}
       {u.role !== 'ADMIN' && <AttendanceHistory userId={id} />}
 
       <div className="card scroll">

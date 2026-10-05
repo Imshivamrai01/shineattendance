@@ -25,7 +25,7 @@ export default function Login() {
         <p className="muted">Sign in with your User ID (email, mobile or employee ID) and password.</p>
         {err && <div className="alert">{err}</div>}
         <div style={{ display: 'grid', gap: 14 }}>
-          <Field label="User ID"><input value={identifier} onChange={(e) => setId(e.target.value)} autoComplete="username" required autoFocus /></Field>
+          <Field label="User ID" hint="Your Employee ID, email or mobile number"><input value={identifier} onChange={(e) => setId(e.target.value)} autoComplete="username" required autoFocus /></Field>
           <Field label="Password"><input type="password" value={password} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required /></Field>
           <button className="btn primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </div>

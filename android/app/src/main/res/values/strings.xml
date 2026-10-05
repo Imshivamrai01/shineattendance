@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shine Attendance</string>
+    <string name="tracking_channel">Attendance location</string>
+    <string name="tracking_title">Shine Attendance: location on</string>
+    <string name="tracking_text">You are checked in. Leaving the office checks you out automatically.</string>
+</resources>

@@ -13,15 +13,23 @@ const MAX_BYTES = 1.5 * 1024 * 1024;
  * Upload a camera capture (JPEG data URL) as a private "authenticated" asset.
  * Returns { publicId, version } to store; use photoUrl() to get a signed viewing URL.
  */
-export async function uploadAttendancePhoto(dataUrl, { userId, kind }) {
+export function uploadAttendancePhoto(dataUrl, { userId, kind }) {
+  return uploadImage(dataUrl, { folder: 'shine_attendance/attendance', name: `${userId}_${kind}`, missing: 'A live camera photo is required' });
+}
+
+/** Profile picture (resized to a small square JPEG in the browser), stored privately like attendance photos. */
+export function uploadProfilePhoto(dataUrl, { userId }) {
+  return uploadImage(dataUrl, { folder: 'shine_attendance/profile', name: String(userId), missing: 'Choose a photo' });
+}
+
+async function uploadImage(dataUrl, { folder, name, missing }) {
   const { cloud, key, secret } = cfg();
   const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl || '');
-  if (!m) throw bad('A live camera photo is required');
+  if (!m) throw bad(missing);
   const buf = Buffer.from(m[1], 'base64');
   if (buf.length < 200 || buf.length > MAX_BYTES) throw bad('Photo is invalid or too large');
 
-  const folder = 'shine_attendance/attendance';
-  const publicId = `${userId}_${kind}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  const publicId = `${name}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   const timestamp = Math.floor(Date.now() / 1000);
   const params = { folder, public_id: publicId, timestamp, type: 'authenticated' };
   const toSign = Object.keys(params).sort().map((k) => `${k}=${params[k]}`).join('&');

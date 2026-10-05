@@ -46,3 +46,16 @@ export async function destroySession(req) {
 }
 export const destroyAllSessions = (userId, exceptToken) =>
   M.Session.deleteMany({ user: userId, ...(exceptToken ? { tokenHash: { $ne: sha(exceptToken) } } : {}) });
+
+// ---- Android app: background location ----
+// The app's location service runs without the browser session, so it gets its own long-lived token.
+// It can only report location (POST /api/attendance/track); a new token replaces the previous one.
+export async function issueTrackToken(userId) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  await M.User.updateOne({ _id: userId }, { $set: { trackTokenHash: sha(token) } });
+  return token;
+}
+export async function userByTrackToken(token) {
+  if (typeof token !== 'string' || token.length < 20) return null;
+  return M.User.findOne({ trackTokenHash: sha(token), status: 'ACTIVE' }).lean();
+}

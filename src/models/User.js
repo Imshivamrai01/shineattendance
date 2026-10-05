@@ -17,6 +17,7 @@ const UserSchema = new Schema({
   lockedUntil: Date,
   lastLoginAt: Date,
   // profile: every field optional
+  photo: { type: new Schema({ publicId: String, version: Number }, { _id: false }) }, // profile picture (Cloudinary)
   fatherName: String, motherName: String, dob: String,
   address: String, city: String, state: String, pincode: String,
   emergencyContact1: contact, emergencyContact2: contact,
@@ -27,6 +28,7 @@ const UserSchema = new Schema({
   manager: { type: Schema.Types.ObjectId, ref: 'User', index: true },
   hr: { type: Schema.Types.ObjectId, ref: 'User', index: true },
   location: { type: Schema.Types.ObjectId, ref: 'Location' },
+  trackTokenHash: { type: String, select: false, index: true, sparse: true }, // Android app's background location service (see lib/auth)
   statusReason: String,
   createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });

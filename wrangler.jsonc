@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shine-attendance",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "shine-attendance" }],
+  // Custom domain gives DNS + cert; the explicit route beats the zone's *.shineinfosolutions.in/* (hotel-erp) wildcard
+  "routes": [
+    { "pattern": "attendance.shineinfosolutions.in", "custom_domain": true },
+    { "pattern": "attendance.shineinfosolutions.in/*", "zone_name": "shineinfosolutions.in" }
+  ],
+  "workers_dev": true,
+  // UTC schedules, mapped to routes in worker.js `scheduled` (see CRON_PATHS)
+  "triggers": { "crons": ["*/15 12-15 * * *", "30 14 * * *"] },
+  "vars": {
+    "APP_URL": "https://attendance.shineinfosolutions.in",
+    "SESSION_HOURS": "8",
+    "MAIL_FROM": "Shine Attendance <noreply-attendance@shineinfosolutions.in>",
+    // The 8 PM daily report goes only here
+    "REPORT_EMAIL": "shineinfosolutions1@gmail.com"
+  },
+  // Cloudflare Email Sending (domain onboarded with `wrangler email sending enable shineinfosolutions.in`)
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply-attendance@shineinfosolutions.in"] }],
+  // Run near MongoDB Atlas: each request opens its own DB connection, so DB round-trips dominate
+  "placement": { "mode": "smart" },
+  // bcrypt (cost 12) on login needs more than the default CPU budget
+  "limits": { "cpu_ms": 30000 },
+  "observability": { "enabled": true }
+}

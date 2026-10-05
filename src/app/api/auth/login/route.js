@@ -13,7 +13,7 @@ export const POST = handler(async (ctx) => {
   const { identifier, password } = await readJson(ctx.req);
   if (typeof identifier !== 'string' || typeof password !== 'string') throw new HttpError(400, 'Email/mobile and password are required');
   const id = identifier.trim().toLowerCase();
-  const user = await M.User.findOne({ $or: [{ email: id }, { mobile: id.replace(/[\s-]/g, '') }, { employeeId: identifier.trim().toUpperCase() }] }).select('+passwordHash');
+  const user = await M.User.findOne({ $or: [{ email: id }, { mobile: id.replace(/[\s-]/g, '') }, { employeeId: identifier.replace(/\s+/g, '').toUpperCase() }] }).select('+passwordHash');
   const fail = async (why) => {
     await audit(ctx, {
       raw: true, action: user?.role === 'ADMIN' ? 'ADMIN_LOGIN_FAILED' : 'LOGIN_FAILED', entityType: 'Session',

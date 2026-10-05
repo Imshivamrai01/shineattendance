@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+// CI passes a build number so every APK can be installed over the previous one.
+def buildNumber = (System.getenv('BUILD_NUMBER') ?: '1') as Integer
+// Release signing comes from the environment (GitHub Actions secrets); it is never stored in the repo.
+def keystorePath = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'com.shineinfosolutions.attendance'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.shineinfosolutions.attendance'
+        minSdk 26
+        targetSdk 34
+        versionCode buildNumber
+        versionName "1.0.${buildNumber}"
+        buildConfigField 'String', 'APP_URL', '"https://attendance.shineinfosolutions.in"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storeType 'PKCS12'
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (keystorePath) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
