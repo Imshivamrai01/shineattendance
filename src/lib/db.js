@@ -14,6 +14,7 @@ import '../models/Setting.js';
 import '../models/Counter.js';
 import '../models/Task.js';
 import '../models/Notification.js';
+import '../models/WaMessage.js';
 
 const g = globalThis;
 g.__mongo ||= { conn: null, promise: null };
@@ -119,6 +120,7 @@ export const M = {
   get Counter() { return model('Counter'); },
   get Task() { return model('Task'); },
   get Notification() { return model('Notification'); },
+  get WaMessage() { return model('WaMessage'); },
 };
 
 export async function getSettings() {

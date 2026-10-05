@@ -8,6 +8,8 @@ const S = new mongoose.Schema({
   radiusConfigured: { type: Boolean, default: false },
   sheetScriptUrl: String, sheetScriptSecret: String, sheetTab: { type: String, default: 'Attendance' },
   notificationEmail: String,
+  // WhatsApp Cloud API (CRM page). The token never leaves the server.
+  waPhoneId: String, waBusinessId: String, waToken: String,
   lastSheetSync: Date, lastMailError: String, mailEveryCheckin: { type: Boolean, default: false }, lastAbsentMailDate: String, lastMailErrorAt: Date, lastSheetError: String, lastSheetErrorAt: Date,
 }, { timestamps: true });
 export default mongoose.models.Setting || mongoose.model('Setting', S);

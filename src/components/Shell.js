@@ -20,6 +20,7 @@ const NAV = [
   { href: '/users', label: 'People', icon: 'users', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
   { href: '/departments', label: 'Departments', icon: 'building', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
   { href: '/locations', label: 'Locations', icon: 'pin', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
+  { href: '/crm', label: 'CRM', icon: 'chat', roles: ['ADMIN', 'COO'] },
   { href: '/users/import', label: 'Import', icon: 'upload', roles: ['ADMIN'] },
   { href: '/admin/audit-logs', label: 'Audit logs', icon: 'shield', roles: ['ADMIN'] },
   { href: '/settings', label: 'Settings', icon: 'cog', roles: ['ADMIN'] },

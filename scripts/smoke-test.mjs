@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
 import { dayFlags, label12 } from '../src/lib/hours.js';
+import { normalizePhone } from '../src/lib/whatsapp.js';
+import { startWaMock } from './wa-mock.mjs';
 
 // A local SMTP server that records every email the app sends, so recipients and content can be checked.
 const outbox = [];
@@ -20,14 +22,15 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local' };
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
+const wa = startWaMock(3999);
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
 let r = await seed(); assert.match(r.stdout, /created/, r.stdout + r.stderr);
 r = await seed(); assert.match(r.stdout, /already exists/, 'seed must be idempotent');
 
 const server = spawn('npx', ['next', 'start', '-p', String(PORT)], { env, shell: true, stdio: 'ignore' });
-const cleanup = async () => { spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F']); await mongo.stop(); smtp.close(); };
+const cleanup = async () => { spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F']); await mongo.stop(); smtp.close(); wa.close(); };
 
 class Client {
   constructor() { this.cookie = ''; }
@@ -298,6 +301,30 @@ try {
   assert.equal(done.late, false); t('HR marks work done the same day (scores 1)');
   const team = ok(await hrC.call('GET', '/api/tasks'));
   assert.ok(team.people.some((p) => p._id === pv.user._id)); assert.equal(team.tasks.length, 2); t('HR sees the team tasks and assignable people');
+
+  // CRM (WhatsApp): Admin + COO only; nothing can be sent until it is connected
+  assert.equal((await hrC.call('GET', '/api/crm')).status, 403); assert.equal((await pe.call('GET', '/api/crm')).status, 403);
+  const crm = ok(await cooC.call('GET', '/api/crm'));
+  assert.equal(crm.configured, false); assert.equal(crm.hasToken, false); assert.ok(crm.presets.some((p) => p.name === 'interview_invite')); assert.ok(crm.employees.length > 0);
+  assert.equal((await admin.call('POST', '/api/crm/send', { template: 'interview_invite', recipients: [{ name: 'A', phone: '9876543210', params: ['A'] }] })).status, 400);
+  assert.equal((await admin.call('POST', '/api/crm/config', { phoneId: 'abc', businessId: '123', token: 'x' })).status, 400);
+  assert.deepEqual(['98765 43210', '09876543210', '+91 98765-43210', '+1 (555) 640-9971', '12345'].map(normalizePhone), ['919876543210', '919876543210', '919876543210', '15556409971', null]); t('CRM: Admin + COO only, needs a WhatsApp connection, phone numbers normalised');
+  // Connect (checked against the API), list templates, bulk send with per-person values, failures logged
+  assert.equal((await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: 'w'.repeat(60) })).status, 400);
+  assert.equal(ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: wa.token })).account.number, '+91 90000 11111');
+  const crm2 = ok(await cooC.call('GET', '/api/crm'));
+  assert.equal(crm2.configured, true); assert.equal(crm2.account.test, false); assert.equal(JSON.stringify(crm2).includes(wa.token), false, 'token never sent to the browser');
+  assert.deepEqual(crm2.templates.filter((x) => x.usable).map((x) => x.name), ['employee_welcome', 'interview_invite']);
+  assert.equal(crm2.templates.find((x) => x.name === 'interview_invite').vars, 5);
+  const inv = ok(await cooC.call('POST', '/api/crm/send', { template: 'interview_invite', language: 'en', purpose: 'INTERVIEW', recipients: [
+    { name: 'Rahul Kumar', phone: '98765 43210', params: ['Rahul', 'Sales Executive', '10 October', '11:00 AM', 'Office,\nGorakhpur'] },
+    { name: 'Blocked', phone: '9000000000', params: ['Blocked', 'Sales Executive', '10 October', '11:00 AM', 'Office'] },
+    { name: 'No number', phone: '12', params: [] }] }));
+  assert.deepEqual([inv.sent, inv.failed], [1, 2]); assert.match(inv.results[1].error, /allowed list/); assert.match(inv.results[2].error, /valid mobile/);
+  assert.equal(wa.sent.length, 1); assert.equal(wa.sent[0].to, '919876543210'); assert.equal(wa.sent[0].template.name, 'interview_invite');
+  assert.deepEqual(wa.sent[0].template.components[0].parameters.map((p) => p.text), ['Rahul', 'Sales Executive', '10 October', '11:00 AM', 'Office, Gorakhpur']);
+  assert.equal(ok(await cooC.call('GET', '/api/crm')).history.length, 3);
+  assert.equal(ok(await cooC.call('POST', '/api/crm/templates', { preset: 'team_update' })).status, 'PENDING'); t('CRM: connect, templates, bulk send (sent + failed logged), template submission');
 
   // Scheduled jobs
   assert.equal((await admin.call('GET', '/api/cron/daily-report')).status, 401); t('cron endpoints reject requests without the secret');
