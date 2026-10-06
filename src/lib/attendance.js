@@ -11,8 +11,11 @@ import { notifyReentry, notifyAttendanceChange, notifyCheckin, notifyCheckout } 
 const MAX_CHECKIN_ACCURACY_M = 30;  // GPS fixes worse than this get the "weak GPS" hint
 const MAX_GPS_MARGIN_M = 40;        // most uncertainty we will forgive, however poor the fix
 const IGNORE_PING_ACCURACY_M = 50;  // ...and are ignored when deciding to auto check-out
-const OUT_PINGS_TO_CHECKOUT = 2;    // consecutive out-of-range pings (avoids one-off GPS jumps)
-const CLEARLY_AWAY_M = 100;         // this far (with a good fix) = left for sure: check out on the first ping
+const OUT_PINGS_TO_CHECKOUT = 3;    // consecutive out-of-range pings (avoids one-off GPS jumps)
+// ...and they must span this long, so one bad reading (or two reports arriving together) can't check someone out.
+const OUT_SECONDS_TO_CHECKOUT = process.env.OUT_SECONDS_TO_CHECKOUT != null ? Number(process.env.OUT_SECONDS_TO_CHECKOUT) : 60;
+const CLEARLY_AWAY_M = 100;         // this far with a precise GPS fix = left for sure: check out on the first ping
+const PRECISE_FIX_M = 25;           // indoors, cell-tower / Wi-Fi fixes claim 30-50 m and can be hundreds of metres off
 
 // Phones report accuracy as a ~68% radius, and indoors a fix is easily 20-40 m off. Allow twice the reported
 // accuracy (capped) so someone inside the office isn't refused, or checked out, because of GPS error.
@@ -142,15 +145,16 @@ export async function ping(ctx, coords) {
   }
   session.outCount = (session.outCount || 0) + 1;
   session.firstOutAt ||= new Date();
-  const clearlyAway = distance > Math.max(CLEARLY_AWAY_M, limit * 3) && c.accuracy != null && c.accuracy <= IGNORE_PING_ACCURACY_M;
-  if (session.outCount < OUT_PINGS_TO_CHECKOUT && !clearlyAway) { await rec.save(); return { open: true, distance, limit, warning: true }; }
+  const clearlyAway = distance > Math.max(CLEARLY_AWAY_M, limit * 3) && c.accuracy != null && c.accuracy <= PRECISE_FIX_M;
+  const sustained = session.outCount >= OUT_PINGS_TO_CHECKOUT && Date.now() - new Date(session.firstOutAt).getTime() >= OUT_SECONDS_TO_CHECKOUT * 1000;
+  if (!sustained && !clearlyAway) { await rec.save(); return { open: true, distance, limit, warning: true }; }
   session.checkOut = session.firstOutAt > session.checkIn ? session.firstOutAt : new Date();
   session.autoCheckout = true;
-  session.outGeo = { lat: c.lat, lng: c.lng, distance, verified: false };
+  session.outGeo = { lat: c.lat, lng: c.lng, distance, accuracy: c.accuracy ?? undefined, verified: false };
   session.outCount = 0; session.firstOutAt = undefined;
   await rec.save();
   await audit(ctx, { action: 'AUTO_CHECKOUT', entityType: 'Attendance', entityId: rec._id, subjectId: user._id, department: user.department,
-    location: loc._id, newData: { distance, limit, checkOut: session.checkOut }, reason: `Moved ${distance} m from ${loc.name} (limit ${limit} m)` });
+    location: loc._id, newData: { distance, limit, accuracy: c.accuracy, pings: session.outCount || 1, checkOut: session.checkOut }, reason: `Moved ${distance} m from ${loc.name} (limit ${limit} m)` });
   queueSheetSync(rec._id);
   notifyCheckout({ userId: user._id, recId: rec._id, at: session.checkOut, auto: true, distance });
   return { open: false, autoCheckedOut: true, distance, limit };

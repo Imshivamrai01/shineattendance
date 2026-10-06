@@ -22,7 +22,7 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', OUT_SECONDS_TO_CHECKOUT: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
 const wa = startWaMock(3999);
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
@@ -100,7 +100,12 @@ try {
   assert.equal(weak.status, 403); assert.match(weak.data.error, /not in the office/); t('outside + weak GPS => "not in the office"');
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 }));
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true);
-  // ~67 m away: beyond the 20 m checkout radius but not clearly gone => warning first, check-out on the 2nd ping
+  // ~67 m away: beyond the 20 m checkout radius but not clearly gone => warnings first, check-out on the 3rd report
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
+  // a far-away reading that is not a precise GPS fix (cell tower / Wi-Fi) is never enough on its own
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true); // back inside: counter resets
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 40 })).warning, true);
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('moving beyond checkout radius auto checks out');
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732 })).open, false);
