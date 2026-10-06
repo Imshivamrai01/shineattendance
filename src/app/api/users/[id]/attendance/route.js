@@ -1,7 +1,7 @@
 import { handler, oid, bad } from '@/lib/http';
 import { loadVisibleUser } from '@/lib/users';
 import { M, getSettings } from '@/lib/db';
-import { dayFlags } from '@/lib/hours';
+import { awayMs, dayFlags, lunchCfg } from '@/lib/hours';
 import { dateKey } from '@/lib/dates';
 import { hoursWorked } from '@/lib/attendance';
 import { photoUrl } from '@/lib/cloudinary';
@@ -34,8 +34,8 @@ export const GET = handler(async ({ req, user, params }) => {
     else if (weekday === 0) status = 'WEEK_OFF';
     else status = 'ABSENT';
     days.push({
-      date, weekday, status, hours: r && r.status === 'ACTIVE' ? hoursWorked(r) : 0, voidReason: r?.voidReason, flags: r && r.status === 'ACTIVE' ? dayFlags(r, cfg) : undefined,
-      sessions: (r?.sessions || []).map(({ inPhoto, outPhoto, breaks, ...s }) => ({ ...s, inPhotoUrl: photoUrl(inPhoto), outPhotoUrl: photoUrl(outPhoto), breaks: (breaks || []).map(({ photo, ...b }) => b) })),
+      date, weekday, status, hours: r && r.status === 'ACTIVE' ? hoursWorked(r, cfg) : 0, voidReason: r?.voidReason, flags: r && r.status === 'ACTIVE' ? dayFlags(r, cfg) : undefined,
+      sessions: (r?.sessions || []).map(({ inPhoto, outPhoto, breaks, ...s }) => ({ ...s, inPhotoUrl: photoUrl(inPhoto), outPhotoUrl: photoUrl(outPhoto), breaks: (breaks || []).map(({ photo, ...b }) => ({ ...b, deductedMinutes: Math.round(awayMs(b, date, cfg) / 60000) })) })),
     });
   }
 
@@ -47,7 +47,7 @@ export const GET = handler(async ({ req, user, params }) => {
   }
 
   return {
-    person: { _id: u._id, name: u.name, employeeId: u.employeeId, role: u.role }, month, office: { start: cfg.workStart || '10:00', end: cfg.workEnd || '18:00', grace: cfg.graceMinutes || 0 }, months: months.reverse(), start, today, days,
+    person: { _id: u._id, name: u.name, employeeId: u.employeeId, role: u.role }, month, office: { start: cfg.workStart || '10:00', end: cfg.workEnd || '18:00', grace: cfg.graceMinutes || 0, ...lunchCfg(cfg) }, months: months.reverse(), start, today, days,
     summary: {
       present: present.length, absent: days.filter((x) => x.status === 'ABSENT').length, voided: days.filter((x) => x.status === 'VOIDED').length,
       lateDays: present.filter((x) => x.flags?.late).length, earlyDays: present.filter((x) => x.flags?.early).length,

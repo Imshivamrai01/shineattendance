@@ -62,6 +62,8 @@ export default function Settings() {
             <Field label="Office starts (check-in time)" hint="Checking in after this is marked Late"><input type="time" value={s.workStart || '10:00'} onChange={(e) => set('workStart', e.target.value)} /></Field>
             <Field label="Office ends (check-out time)" hint="Checking out before this is marked Left early"><input type="time" value={s.workEnd || '18:00'} onChange={(e) => set('workEnd', e.target.value)} /></Field>
             <Field label="Grace period (minutes)" hint="Late only after start time + grace"><input type="number" min="0" max="180" value={s.graceMinutes ?? 0} onChange={(e) => set('graceMinutes', e.target.value)} /></Field>
+            <Field label="Lunch starts" hint="Leaving the office during lunch is never counted"><input type="time" value={s.lunchStart || '13:30'} onChange={(e) => set('lunchStart', e.target.value)} /></Field>
+            <Field label="Lunch ends"><input type="time" value={s.lunchEnd || '14:30'} onChange={(e) => set('lunchEnd', e.target.value)} /></Field>
           </div>
         </div>
 

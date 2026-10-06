@@ -2,7 +2,7 @@ import { M, getSettings, defer } from './db.js';
 import { rowFor, upsertRow, sheetsConfigured, employeeRow, upsertEmployee, taskRow, upsertTask } from './sheets.js';
 import { taskLabel, taskScore } from './taskScore.js';
 
-const hoursWorked = (rec) => Math.round(((rec.sessions || []).reduce((ms, s) => ms + (s.checkIn && s.checkOut ? new Date(s.checkOut) - new Date(s.checkIn) : 0), 0) / 3600000) * 100) / 100;
+import { workedHours } from './hours.js';
 
 async function run(recId) {
   try {
@@ -10,7 +10,7 @@ async function run(recId) {
     if (!sheetsConfigured(s)) return;
     const rec = await M.Attendance.findById(recId).populate('user', 'name employeeId role').populate('location', 'name').lean();
     if (!rec) return;
-    await upsertRow(s, rowFor(rec, rec.status === 'ACTIVE' ? hoursWorked(rec) : 0, rec.status === 'ACTIVE' ? s : null));
+    await upsertRow(s, rowFor(rec, rec.status === 'ACTIVE' ? workedHours(rec, s) : 0, rec.status === 'ACTIVE' ? s : null));
     await M.Setting.updateOne({ key: 'system' }, { $set: { lastSheetSync: new Date() }, $unset: { lastSheetError: '', lastSheetErrorAt: '' } });
   } catch (e) {
     // Sheets is only a reporting copy: never let it affect attendance. Surface the error in Settings.

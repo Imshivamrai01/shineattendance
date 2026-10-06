@@ -12,7 +12,7 @@ export const POST = handler(async (ctx) => {
   const s = await getSettings();
   if (!sheetsConfigured(s)) throw bad('Connect Google Sheets first');
   const recs = await queryAttendance(ctx.user, new URLSearchParams({ from: '2000-01-01' }));
-  const rows = recs.map((r) => rowFor(r, r.status === 'ACTIVE' ? hoursWorked(r) : 0, r.status === 'ACTIVE' ? s : null)).reverse();
+  const rows = recs.map((r) => rowFor(r, r.status === 'ACTIVE' ? hoursWorked(r, s) : 0, r.status === 'ACTIVE' ? s : null)).reverse();
   const people = await M.User.find({ role: { $ne: 'ADMIN' } }).sort({ name: 1 }).populate('department', 'name').populate('manager', 'name').populate('hr', 'name').populate('location', 'name').lean();
   const tasks = await populateTask(M.Task.find().sort({ date: 1, createdAt: 1 })).lean();
   try {

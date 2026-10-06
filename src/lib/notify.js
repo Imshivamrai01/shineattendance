@@ -2,7 +2,7 @@ import { M, getSettings, defer } from './db.js';
 import { sendMail, layout, appUrl, mailConfigured, esc } from './mailer.js';
 import { taskLabel, taskScore } from './taskScore.js';
 import { dateKey } from './dates.js';
-import { dayFlags, hoursCfg, label12, minutesText } from './hours.js';
+import { awayMs, dayFlags, hoursCfg, label12, minutesText, workedHours } from './hours.js';
 
 /*
  * Who gets which email (role-wise):
@@ -71,7 +71,7 @@ const fmtTime = (d) => (d ? new Date(d).toLocaleTimeString('en-IN', { timeZone: 
 const fmtDay = (d) => new Date(d).toLocaleDateString('en-IN', { timeZone: IST, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const dayLabel = (key) => new Date(`${key}T00:00:00Z`).toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
 const idOf = (u) => `${u.name}${u.employeeId ? ` (${u.employeeId})` : ''}`;
-const hoursOf = (rec) => Math.round(((rec.sessions || []).reduce((ms, s) => ms + (s.checkIn && s.checkOut ? new Date(s.checkOut) - new Date(s.checkIn) : 0), 0) / 3600000) * 100) / 100;
+const hoursOf = (rec, cfg) => workedHours(rec, cfg);
 const hm = (h) => `${Math.floor(h)} h ${Math.round((h % 1) * 60)} min`;
 const LBL = { name: 'Name', email: 'Email', mobile: 'Mobile', fatherName: "Father's name", motherName: "Mother's name", dob: 'Date of birth', address: 'Address', city: 'City', state: 'State',
   pincode: 'PIN code', emergencyContact1: 'Emergency contact 1', emergencyContact2: 'Emergency contact 2', designation: 'Designation', joiningDate: 'Joining date',
@@ -135,7 +135,7 @@ export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = fal
   queue('check-out', async () => {
     const [u, rec, cfg] = await Promise.all([M.User.findById(userId).select('name email employeeId').lean(), M.Attendance.findById(recId).lean(), getSettings()]);
     if (!u || !rec) return;
-    const hrs = hoursOf(rec);
+    const hrs = hoursOf(rec, cfg);
     const f = dayFlags(rec, cfg);
     const c = hoursCfg(cfg);
     const m = endOfDay
@@ -339,7 +339,7 @@ export async function sendDailyReport(date = dateKey()) {
     const taskList = ts.map((t) => `${t.title}: ${taskLabel(t)}${t.note ? ` (${t.note})` : ''}`);
     if (!r) return { p, present: false, taskLine, taskList };
     const f = dayFlags(r, cfg);
-    const hrs = hoursOf(r);
+    const hrs = hoursOf(r, cfg);
     totalHrs += hrs;
     if (f.late) late++;
     if (f.early) early++;
@@ -350,7 +350,7 @@ export async function sendDailyReport(date = dateKey()) {
       r.sessions.some((s) => s.inGeo?.verified === false) && 'Check-in outside office',
       ...r.sessions.filter((s) => s.lateReason).map((s) => `Late reason: ${s.lateReason}`),
       ...r.sessions.filter((s) => s.reentryReason).map((s) => `Came back ${fmtTime(s.checkIn)}: ${s.reentryReason}`),
-      ...r.sessions.flatMap((s) => (s.breaks || []).map((b) => `Away ${fmtTime(b.outAt)} to ${fmtTime(b.backAt)}: ${b.reason}`)),
+      ...r.sessions.flatMap((s) => (s.breaks || []).map((b) => `Away ${fmtTime(b.outAt)} to ${fmtTime(b.backAt)} (${minutesText(Math.round(awayMs(b, r.date, cfg) / 60000))} deducted): ${b.reason}`)),
     ].filter(Boolean);
     return { p, present: true, first: r.sessions[0]?.checkIn, last: r.sessions.filter((s) => s.checkOut).at(-1)?.checkOut, hrs, sessions: r.sessions.map(sessionText), notes, taskLine, taskList };
   });

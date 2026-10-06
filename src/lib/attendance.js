@@ -2,7 +2,7 @@ import { M, getSettings } from './db.js';
 import { audit } from './audit.js';
 import { bad, notFound, HttpError } from './http.js';
 import { dateKey } from './dates.js';
-import { afterHours, closingTime, dayFlags, hoursCfg, label12, minutesText } from './hours.js';
+import { afterHours, closingTime, dayFlags, hoursCfg, inLunch, label12, minutesText, workedHours } from './hours.js';
 import { distanceMeters } from './geo.js';
 import { photosEnabled, uploadAttendancePhoto } from './cloudinary.js';
 import { queueSheetSync } from './sheetSync.js';
@@ -92,7 +92,7 @@ export async function checkIn(ctx, coords) {
   const allClosed = { user: user._id, date, status: 'ACTIVE', sessions: { $not: { $elemMatch: { checkOut: null } } } };
   const r = resume
     // Back after an automatic check-out: the earlier session carries on from its original check-in time.
-    // The time away is recorded (with the reason and the return photo) but still counts as working time.
+    // The time away is recorded (with the reason and the return photo) and deducted from the hours, except during lunch.
     ? await M.Attendance.updateOne(allClosed,
       { $set: { 'sessions.$[s].autoCheckout': false }, $unset: { 'sessions.$[s].checkOut': '', 'sessions.$[s].outGeo': '' },
         $push: { 'sessions.$[s].breaks': { outAt: prev.checkOut, backAt: now, distance: prev.outGeo?.distance, reason: reentryReason, photo: inPhoto } } },
@@ -149,6 +149,7 @@ export async function ping(ctx, coords) {
     await closeAtEndOfDay(ctx, rec, cfg);
     return { open: false, autoCheckedOut: true, endOfDay: true };
   }
+  if (inLunch(cfg)) return { open: true, lunch: true };
   const loc = rec.location ? await M.Location.findById(rec.location).lean() : null;
   if (!loc || !c.ok || (c.accuracy != null && c.accuracy > IGNORE_PING_ACCURACY_M)) return { open: true, ignored: true };
   const session = rec.sessions.find((s) => !s.checkOut);
@@ -262,8 +263,5 @@ export async function voidAttendance(ctx, { attendanceId, reason }) {
   return rec;
 }
 
-export function hoursWorked(rec) {
-  let ms = 0;
-  for (const s of rec.sessions || []) if (s.checkIn && s.checkOut) ms += new Date(s.checkOut) - new Date(s.checkIn);
-  return Math.round((ms / 3600000) * 100) / 100;
-}
+/** Pass the settings so a custom lunch time is respected (defaults to 1:30 - 2:30 PM). */
+export const hoursWorked = (rec, cfg) => workedHours(rec, cfg);

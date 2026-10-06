@@ -32,3 +32,28 @@ export function dayFlags(rec, cfg) {
 export const afterHours = (cfg, d = new Date()) => istMin(d) >= toMin(hoursCfg(cfg).workEnd);
 /** The office closing instant of an IST date key ("2026-09-30" -> 18:00 IST that day). */
 export const closingTime = (dateKey, cfg) => new Date(`${dateKey}T${hoursCfg(cfg).workEnd}:00+05:30`);
+
+// Lunch break (default 1:30 - 2:30 PM IST): leaving the office then is fine and is never counted against anyone.
+export const lunchCfg = (s) => ({ lunchStart: s?.lunchStart || '13:30', lunchEnd: s?.lunchEnd || '14:30' });
+export const inLunch = (cfg, d = new Date()) => { const l = lunchCfg(cfg), m = istMin(d); return m >= toMin(l.lunchStart) && m < toMin(l.lunchEnd); };
+const istAt = (dateKey, hhmm) => new Date(`${dateKey}T${hhmm}:00+05:30`).getTime();
+
+/** Milliseconds of one time away (auto check-out -> return) that are deducted: everything outside the lunch break. */
+export function awayMs(b, dateKey, cfg) {
+  if (!b?.outAt || !b?.backAt) return 0;
+  const out = new Date(b.outAt).getTime(), back = new Date(b.backAt).getTime();
+  const l = lunchCfg(cfg);
+  const lunch = Math.max(0, Math.min(back, istAt(dateKey, l.lunchEnd)) - Math.max(out, istAt(dateKey, l.lunchStart)));
+  return Math.max(0, back - out - lunch);
+}
+
+/** Hours worked on a day: closed sessions, minus time spent away from the office (lunch excepted). */
+export function workedHours(rec, cfg) {
+  let ms = 0;
+  for (const s of rec?.sessions || []) {
+    if (!s.checkIn || !s.checkOut) continue;
+    ms += new Date(s.checkOut) - new Date(s.checkIn);
+    for (const b of s.breaks || []) ms -= awayMs(b, rec.date, cfg);
+  }
+  return Math.round((Math.max(0, ms) / 3600000) * 100) / 100;
+}

@@ -21,7 +21,7 @@ function Sessions({ day }) {
       {s.autoCheckout && <Badge tone="warn">auto out</Badge>}
       {s.endOfDay && <Badge>office closed</Badge>}
       {s.lateReason && <span className="muted small">Late: {s.lateReason}</span>}
-      {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}: {b.reason}</span>)}
+      {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}{b.deductedMinutes ? ` (${minutesText(b.deductedMinutes)} not counted)` : ' (lunch, counted)'}: {b.reason}</span>)}
       {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
     </div>
   ));
@@ -68,7 +68,7 @@ export default function AttendanceHistory({ userId }) {
           )}
         </div>
       </div>
-      <p className="muted small" style={{ marginTop: 0 }}>Records start on {dayLabel(data.start)} (the day this account was added). Office hours {label12(data.office.start)} to {label12(data.office.end)}{data.office.grace ? ` (+${data.office.grace} min grace)` : ''}. Sunday is the weekly off.</p>
+      <p className="muted small" style={{ marginTop: 0 }}>Records start on {dayLabel(data.start)} (the day this account was added). Office hours {label12(data.office.start)} to {label12(data.office.end)}, lunch {label12(data.office.lunchStart)} to {label12(data.office.lunchEnd)}{data.office.grace ? ` (+${data.office.grace} min grace)` : ''}. Sunday is the weekly off.</p>
 
       {mode === 'monthly' ? (
         <>

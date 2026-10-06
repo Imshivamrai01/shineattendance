@@ -5,7 +5,7 @@ import { completion, scopeFilter } from '@/lib/users';
 import { photosEnabled, photoUrl } from '@/lib/cloudinary';
 import { hoursWorked } from '@/lib/attendance';
 import { canActOn } from '@/lib/workflow';
-import { afterHours, dayFlags, hoursCfg } from '@/lib/hours';
+import { afterHours, dayFlags, hoursCfg, inLunch, lunchCfg } from '@/lib/hours';
 
 const PENDING = ['PENDING_HR', 'PENDING_MANAGER', 'PENDING_COO', 'PENDING_ADMIN'];
 
@@ -75,10 +75,11 @@ export const GET = handler(async ({ user }) => {
   const today = dateKey();
   const out = { role: user.role };
 
+  const cfgSettings = await getSettings();
   const mine = await M.Attendance.findOne({ user: user._id, date: today }).lean();
   const open = await M.Attendance.findOne({ user: user._id, status: 'ACTIVE', 'sessions.checkOut': null }).lean();
   out.today = {
-    date: today, record: mine, checkedIn: !!open, hours: mine ? hoursWorked(mine) : 0,
+    date: today, record: mine, checkedIn: !!open, hours: mine ? hoursWorked(mine, cfgSettings) : 0,
     locationAssigned: !!user.location, photosRequired: photosEnabled(),
     // Left the premises earlier today: a reason is needed to check in again.
     needsReason: !!(mine?.status === 'ACTIVE' && mine.sessions.at(-1)?.autoCheckout && mine.sessions.at(-1)?.checkOut),
@@ -89,12 +90,11 @@ export const GET = handler(async ({ user }) => {
 
   if (user.role !== 'ADMIN') {
     const recent = await M.Attendance.find({ user: user._id }).sort({ date: -1 }).limit(7).lean();
-    out.recent = recent.map((r) => ({ date: r.date, status: r.status, hours: hoursWorked(r), in: r.sessions[0]?.checkIn, out: r.sessions.at(-1)?.checkOut }));
+    out.recent = recent.map((r) => ({ date: r.date, status: r.status, hours: hoursWorked(r, cfgSettings), in: r.sessions[0]?.checkIn, out: r.sessions.at(-1)?.checkOut }));
     out.myPending = await M.ChangeRequest.countDocuments({ requester: user._id, status: { $in: PENDING } });
   }
 
-  const cfgSettings = await getSettings();
-  out.office = hoursCfg(cfgSettings);
+  out.office = { ...hoursCfg(cfgSettings), ...lunchCfg(cfgSettings), lunchNow: inLunch(cfgSettings) };
   // Once office hours are over, "not checked in" becomes "absent" (Sunday is the weekly off).
   out.today.closed = afterHours(cfgSettings);
   out.today.weekOff = new Date(`${today}T00:00:00Z`).getUTCDay() === 0;

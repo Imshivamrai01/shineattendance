@@ -4,6 +4,7 @@ const S = new mongoose.Schema({
   key: { type: String, unique: true, default: 'system' },
   defaultRadiusMeters: { type: Number, default: 5 },
   workStart: { type: String, default: '10:00' }, workEnd: { type: String, default: '18:00' }, graceMinutes: { type: Number, default: 0 },
+  lunchStart: { type: String, default: '13:30' }, lunchEnd: { type: String, default: '14:30' },
   enforceGeofence: { type: Boolean, default: true },
   radiusConfigured: { type: Boolean, default: false },
   sheetScriptUrl: String, sheetScriptSecret: String, sheetTab: { type: String, default: 'Attendance' },

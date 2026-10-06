@@ -147,7 +147,7 @@ export default function Attendance() {
                         {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
                         {s.reentryReason && <span className="muted small">Back: {s.reentryReason}</span>}
                         {s.lateReason && <span className="muted small">Late: {s.lateReason}</span>}
-                        {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}: {b.reason}</span>)}
+                        {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}{b.deductedMinutes ? ` (${minutesText(b.deductedMinutes)} not counted)` : ' (lunch, counted)'}: {b.reason}</span>)}
                       </div>
                     </div>
                     {s.outPhotoUrl && <a href={s.outPhotoUrl} target="_blank" rel="noreferrer" title="Check-out photo"><img className="thumb" src={s.outPhotoUrl} alt="Check-out" /></a>}

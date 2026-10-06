@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
-import { dayFlags, label12 } from '../src/lib/hours.js';
+import { awayMs, dayFlags, label12, workedHours } from '../src/lib/hours.js';
 import { normalizePhone } from '../src/lib/whatsapp.js';
 import { startWaMock } from './wa-mock.mjs';
 
@@ -59,13 +59,21 @@ try {
   const cfg0 = ok(await admin.call('GET', '/api/settings')).settings;
   assert.equal(cfg0.workStart, '10:00'); assert.equal(cfg0.workEnd, '18:00');
   assert.equal((await admin.call('PATCH', '/api/settings', { workStart: '18:00', workEnd: '10:00', reason: 'invalid times' })).status, 400);
-  ok(await admin.call('PATCH', '/api/settings', { workStart: '00:01', workEnd: '23:59', reason: 'Test office hours' })); t('office hours default 10:00-18:00 and validated');
+  ok(await admin.call('PATCH', '/api/settings', { workStart: '00:01', workEnd: '23:59', lunchStart: '00:00', lunchEnd: '00:01', reason: 'Test office hours' })); t('office hours default 10:00-18:00 and validated');
   // dayFlags: IST 10:25 check-in is 25 min late, IST 17:00 check-out is 60 min early (UTC 04:55 / 11:30)
   const fl = dayFlags({ sessions: [{ checkIn: '2026-09-29T04:55:00Z', checkOut: '2026-09-29T11:30:00Z' }] }, { workStart: '10:00', workEnd: '18:00', graceMinutes: 0 });
   assert.deepEqual([fl.late, fl.lateMinutes, fl.early, fl.earlyMinutes], [true, 25, true, 60]);
   assert.equal(dayFlags({ sessions: [{ checkIn: '2026-09-29T04:30:00Z', checkOut: '2026-09-29T12:30:00Z' }] }, { workStart: '10:00', workEnd: '18:00' }).late, false);
   assert.equal(dayFlags({ sessions: [{ checkIn: '2026-09-29T04:40:00Z' }] }, { workStart: '10:00', workEnd: '18:00', graceMinutes: 15 }).late, false);
   assert.equal(label12('18:00'), '6:00 PM'); t('late / left-early rules');
+  // Time away is deducted, except the part inside lunch (1:30 - 2:30 PM IST = 08:00 - 09:00 UTC)
+  const day = (breaks) => ({ date: '2026-09-29', sessions: [{ checkIn: '2026-09-29T04:30:00Z', checkOut: '2026-09-29T12:30:00Z', breaks }] });
+  assert.equal(workedHours(day([])), 8);
+  assert.equal(workedHours(day([{ outAt: '2026-09-29T06:00:00Z', backAt: '2026-09-29T06:45:00Z' }])), 7.25);  // 45 min away in the morning
+  assert.equal(workedHours(day([{ outAt: '2026-09-29T08:05:00Z', backAt: '2026-09-29T08:55:00Z' }])), 8);     // away during lunch only
+  assert.equal(workedHours(day([{ outAt: '2026-09-29T07:50:00Z', backAt: '2026-09-29T09:20:00Z' }])), 7.5);   // 10 min before + 20 min after lunch
+  assert.equal(awayMs({ outAt: '2026-09-29T07:50:00Z', backAt: '2026-09-29T09:20:00Z' }, '2026-09-29') / 60000, 30);
+  assert.equal(workedHours(day([{ outAt: '2026-09-29T06:00:00Z', backAt: '2026-09-29T06:30:00Z' }]), { lunchStart: '11:30', lunchEnd: '12:30' }), 8); t('hours: time away deducted, lunch break excepted');
 
   // Empty system works
   const dash = ok(await admin.call('GET', '/api/dashboard'));
@@ -119,6 +127,11 @@ try {
   assert.equal(noReason.status, 400); assert.equal(noReason.data.code, 'REASON_REQUIRED');
   assert.equal((await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'ab' })).status, 400);
   const back = ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Went out for a client meeting' })).record; t('re-check-in after leaving premises requires a reason');
+  // During lunch nobody is checked out for being outside the office
+  ok(await admin.call('PATCH', '/api/settings', { lunchStart: '00:00', lunchEnd: '23:59', reason: 'Simulate lunch time' }));
+  const atLunch = ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 }));
+  assert.equal(atLunch.lunch, true); assert.equal(atLunch.open, true); assert.equal(ok(await e.call('GET', '/api/dashboard')).office.lunchNow, true);
+  ok(await admin.call('PATCH', '/api/settings', { lunchStart: '00:00', lunchEnd: '00:01', reason: 'Lunch over' })); t('lunch break: no auto check-out, shown to everyone');
   // ...and the earlier session carries on from its original check-in time: no new session, time away recorded
   const resumed = back.sessions.at(-1);
   assert.equal(back.sessions.length, 2); assert.equal(resumed.checkOut, undefined); assert.equal(resumed.autoCheckout, false);

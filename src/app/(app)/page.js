@@ -96,11 +96,13 @@ function AttendanceCard({ data, reload }) {
           <div className="muted small">
             {t.location ? `Assigned location: ${t.location.name} (check in within ${t.location.radiusMeters} m)` : 'No location assigned: check-in works at any office location.'}
             {data.office && <div>Office hours: {label12(data.office.workStart)} to {label12(data.office.workEnd)} · everyone still checked in is checked out at {label12(data.office.workEnd)}</div>}
+            {data.office && <div>Lunch break: {label12(data.office.lunchStart)} to {label12(data.office.lunchEnd)}</div>}
           </div>
         </div>
         <div className="row">
           {dayStatus(t)}
           {t.flags?.late && <Badge tone="warn">Late {minutesText(t.flags.lateMinutes)}</Badge>}
+          {data.office?.lunchNow && <Badge>Lunch time</Badge>}
         </div>
       </div>
       {t.needsReason && !t.checkedIn && (
