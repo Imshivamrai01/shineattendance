@@ -1,6 +1,6 @@
 import { M, getSettings, defer } from './db.js';
 import { sendMail, layout, appUrl, mailConfigured, esc } from './mailer.js';
-import { taskLabel, taskScore } from './taskScore.js';
+import { taskLabel, taskPoints, taskScore } from './taskScore.js';
 import { dateKey } from './dates.js';
 import { awayMs, dayFlags, hoursCfg, label12, minutesText, workedHours } from './hours.js';
 
@@ -286,8 +286,8 @@ export function notifyTaskAssigned(taskId) {
     await sendMail({
       to: t.user.email, subject: `New task for ${dayLabel(t.date)}: ${t.title.slice(0, 60)}`,
       ...layout({ tone: 'info', title: 'New task assigned', greeting: `Hi ${nameOf(t.user)},`, intro: `${by} assigned you a task for ${dayLabel(t.date)}.`,
-        highlight: t.title, rows: [...(t.details ? [['Details', t.details]] : []), ['Due', dayLabel(t.date)], ['Assigned by', by]],
-        notes: ['Your work status is updated in the evening. A task that is not done shows as a late submission and scores 0 for the day.'], link: link('/tasks'), linkText: 'Open my tasks' }),
+        highlight: t.title, rows: [...taskPoints(t.details).map((p, i) => [`Point ${i + 1}`, p]), ['Due', dayLabel(t.date)], ['Assigned by', by]],
+        notes: ['Add your update on this task in the app before you check out; it is then approved by HR.', 'A task that is not done shows as a late submission and scores 0 for the day.'], link: link('/tasks'), linkText: 'Open my tasks' }),
     });
   });
 }

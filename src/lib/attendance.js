@@ -119,6 +119,8 @@ export async function checkOut(ctx, coords) {
   const c = readCoords(coords);
   const open = await M.Attendance.findOne({ user: user._id, status: 'ACTIVE', 'sessions.checkOut': null }).sort({ date: -1 });
   if (!open) throw new HttpError(409, 'You are not checked in');
+  const waiting = await M.Task.countDocuments({ user: user._id, date: open.date, status: 'PENDING' });
+  if (waiting) throw new HttpError(400, `Add your update on today's ${waiting === 1 ? 'task' : `${waiting} tasks`} before checking out (open Tasks).`, { code: 'TASK_UPDATE_REQUIRED' });
   let geo;
   if (c.ok) {
     const loc = open.location ? await M.Location.findById(open.location).lean() : null;

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/client';
 import { Badge, Skeleton } from '@/components/ui';
 import { taskTone } from '@/lib/taskScore';
+import { TaskPoints, TaskUpdate } from '@/components/TaskBits';
 
 const dayLabel = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' });
 const daysAgo = (n) => { const x = new Date(Date.now() + 330 * 60000 - n * 86400000); return x.toISOString().slice(0, 10); };
@@ -40,7 +41,8 @@ export default function TaskHistory({ userId, mine = false }) {
               <div key={t._id} className="task">
                 <div className="task-main">
                   <div className="task-title">{t.title}</div>
-                  {t.details && <div className="muted small">{t.details}</div>}
+                  <TaskPoints details={t.details} />
+                  <TaskUpdate update={t.update} />
                   <div className="muted small task-meta">Assigned by {t.assignedBy?.name || '—'}{t.note ? ` · Note: ${t.note}` : ''}</div>
                 </div>
                 <Badge tone={taskTone(t)}>{t.label}</Badge>

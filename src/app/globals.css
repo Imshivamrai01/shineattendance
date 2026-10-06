@@ -435,3 +435,8 @@ button.att-name { color: var(--brand); cursor: pointer; }
 .policy-foot { text-align: center; margin-top: 18px; }
 .login-links { text-align: center; margin: 14px 0 0; font-size: 13px; }
 @media (max-width: 800px) { .policy { padding: 20px 14px 36px; } .policy-body { padding: 18px 16px; } .policy-head h1 { font-size: 23px; } }
+
+/* Task description points and the assignee's update */
+.points { margin: 4px 0 2px; padding-left: 18px; font-size: 13.5px; color: var(--muted); }
+.points li { margin: 2px 0; overflow-wrap: anywhere; }
+.task-update { margin: 8px 0 4px; padding: 8px 10px; border-left: 3px solid var(--brand); background: var(--brand-soft); border-radius: 0 10px 10px 0; font-size: 14px; overflow-wrap: anywhere; }

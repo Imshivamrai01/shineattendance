@@ -125,14 +125,14 @@ export const upsertEmployee = (settings, row) => post(settings, { action: 'upser
 export const replaceEmployees = (settings, rows) => post(settings, { action: 'replace', tab: EMP_TAB, header: EMP_HEADER, rows });
 
 // ---- Tasks tab: one row per task, keyed by task id ----
-export const TASK_TAB = 'Tasks';
-export const TASK_HEADER = ['Key', 'Date', 'Employee ID', 'Name', 'Task', 'Details', 'Assigned by', 'Status', 'Score', 'Late submission', 'HR note', 'Updated by', 'Updated'];
+export const TASK_TAB = 'Daily Tasks';
+export const TASK_HEADER = ['Key', 'Date', 'Employee ID', 'Name', 'Task', 'Points', 'Assigned by', 'Employee update', 'Status', 'Score', 'Late submission', 'HR note', 'Reviewed by', 'Updated'];
 
 /** `t` must have user / assignedBy / reviewedBy populated with { name, employeeId }. */
 export function taskRow(t, label, score) {
   return [
-    String(t._id), t.date, t.user?.employeeId || '', t.user?.name || '', t.title, t.details || '', t.assignedBy?.name || '',
-    label, score, t.late ? 'Yes' : 'No', t.note || '', t.reviewedBy?.name || '', new Date().toISOString(),
+    String(t._id), t.date, t.user?.employeeId || '', t.user?.name || '', t.title, (t.details || '').replace(/\r?\n/g, ' | '), t.assignedBy?.name || '',
+    t.update?.text ? `${t.update.done ? 'Completed' : 'Not completed'}: ${t.update.text}` : '', label, score, t.late ? 'Yes' : 'No', t.note || '', t.reviewedBy?.name || '', new Date().toISOString(),
   ];
 }
 export const upsertTask = (settings, row) => post(settings, { action: 'upsert', tab: TASK_TAB, header: TASK_HEADER, rows: [row] });

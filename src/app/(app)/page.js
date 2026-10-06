@@ -121,6 +121,7 @@ function AttendanceCard({ data, reload }) {
         <button className="btn primary big" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3) || (t.lateMinutes > 0 && lateReason.trim().length < 3)} onClick={() => act('check-in')}>{busy && !t.checkedIn ? 'Please wait…' : 'Check in'}</button>
         <button className="btn big" disabled={busy || !t.checkedIn} onClick={() => act('check-out')}>{busy && t.checkedIn ? 'Please wait…' : 'Check out'}</button>
       </div>
+      {t.tasksPending > 0 && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>Add your update on {t.tasksPending === 1 ? 'your task' : `your ${t.tasksPending} tasks`} before checking out. <Link href="/tasks">Open Tasks</Link></div>}
       {away && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>You appear to be leaving the office. Stay within range or you will be checked out.</div>}
       {msg && <div className={`alert ${msg.ok ? 'ok' : ''}`} style={{ marginTop: 12 }}>{msg.text}</div>}
       {t.record?.sessions?.length > 0 && (

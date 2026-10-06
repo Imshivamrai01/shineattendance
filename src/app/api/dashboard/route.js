@@ -87,6 +87,7 @@ export const GET = handler(async ({ user }) => {
   };
   if (user.location) out.today.location = await M.Location.findById(user.location).select('name latitude longitude radiusMeters').lean();
   out.completion = completion(user);
+  out.today.tasksPending = await M.Task.countDocuments({ user: user._id, date: today, status: 'PENDING' });
 
   if (user.role !== 'ADMIN') {
     const recent = await M.Attendance.find({ user: user._id }).sort({ date: -1 }).limit(7).lean();

@@ -52,8 +52,9 @@ export async function updateTask(ctx, id, { status, note, title, details }) {
     if (!STATUSES.includes(status)) throw bad('Invalid status');
     const today = dateKey();
     task.status = status;
-    // Done on (or before) its day scores; not done, or done on a later day, is a late submission.
-    task.late = status === 'NOT_DONE' || (status === 'DONE' && today > task.date) || (status === 'PENDING' && today > task.date);
+    // Approved for a day the person reported on (or approved the same day) scores; not done, or reported late, is a late submission.
+    const reportedOnTime = !!task.update?.at && dateKey(task.update.at) <= task.date;
+    task.late = status === 'NOT_DONE' || (status === 'DONE' && !reportedOnTime && today > task.date) || (status === 'PENDING' && today > task.date);
     task.reviewedBy = ctx.user._id; task.reviewedAt = new Date();
   }
   if (note !== undefined) task.note = text(note, 500) || undefined;
@@ -66,6 +67,25 @@ export async function updateTask(ctx, id, { status, note, title, details }) {
   if (status !== undefined && status !== old.status) {
     inApp(subject._id, { title: `Task marked: ${taskLabel(task)}`, body: `${task.title}${task.note ? `. Note: ${task.note}` : ''}`, link: '/tasks' });
   }
+  return task.toObject();
+}
+
+/** The assignee's own update on a task ("what I did"). Needed before they can check out; HR then approves it or not. */
+export async function submitTaskUpdate(ctx, id, { text: body, done }) {
+  const task = await M.Task.findById(id);
+  if (!task || String(task.user) !== String(ctx.user._id)) throw notFound('Task not found');
+  if (!['PENDING', 'SUBMITTED'].includes(task.status)) throw bad('This task has already been reviewed');
+  const t = text(body, 1000);
+  if (t.length < 3) throw bad('Write a short update on this task');
+  task.update = { text: t, done: !!done, at: new Date() };
+  task.status = 'SUBMITTED';
+  await task.save();
+  await audit(ctx, { action: 'SUBMITTED_TASK_UPDATE', entityType: 'Task', entityId: task._id, subjectId: ctx.user._id, department: ctx.user.department,
+    newData: { done: !!done, update: t } });
+  queueTaskSync(task._id);
+  // Tell whoever assigned it, and the person's HR, that it is ready to review.
+  const reviewers = [task.assignedBy, ctx.user.hr].filter((x) => x && String(x) !== String(ctx.user._id));
+  inApp(reviewers, { title: `Task update from ${ctx.user.name}`, body: `${task.title}: ${done ? 'completed' : 'not completed'}. ${t}`.slice(0, 480), link: '/tasks' });
   return task.toObject();
 }
 

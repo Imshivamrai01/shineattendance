@@ -8,6 +8,7 @@ import { simpleParser } from 'mailparser';
 import { awayMs, dayFlags, label12, workedHours } from '../src/lib/hours.js';
 import { normalizePhone } from '../src/lib/whatsapp.js';
 import { startWaMock } from './wa-mock.mjs';
+import { taskPoints } from '../src/lib/taskScore.js';
 
 // A local SMTP server that records every email the app sends, so recipients and content can be checked.
 const outbox = [];
@@ -332,9 +333,19 @@ try {
   assert.equal(h0.months.length, 1); assert.equal(h0.start, h0.today); assert.ok(h0.days.filter((x) => x.date < h0.today).every((x) => x.status === 'BEFORE_START')); t('history starts on the onboarding day');
   const mine = ok(await pe.call('GET', '/api/tasks?mine=1'));
   assert.equal(mine.tasks.length, 2); assert.equal(mine.canAssign, false); assert.equal(mine.people, undefined); t('employee sees own tasks');
+  // The assignee writes their own update first; only then does HR approve
+  assert.deepEqual(taskPoints('- Call the leads\n2. Note who is interested\n\n• Share the summary'), ['Call the leads', 'Note who is interested', 'Share the summary']);
+  assert.equal((await hrC.call('POST', `/api/tasks/${tk1._id}/update`, { text: 'Not my task', done: true })).status, 404);
+  assert.equal((await pe.call('POST', `/api/tasks/${tk1._id}/update`, { text: 'x', done: true })).status, 400);
+  const upd = ok(await pe.call('POST', `/api/tasks/${tk1._id}/update`, { text: 'Called all 20, 6 are interested', done: true })).task;
+  assert.equal(upd.status, 'SUBMITTED'); assert.equal(upd.update.done, true);
+  assert.equal(ok(await hrC.call('GET', '/api/tasks')).tasks.find((x) => x._id === tk1._id).label, 'Waiting for approval');
+  await wait(600);
+  assert.ok(ok(await hrC.call('GET', '/api/notifications')).items.some((n) => /Task update from Priya Verma/.test(n.title))); t('assignee submits an update; HR is told and sees it waiting for approval');
   assert.equal((await pe.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE' })).status, 403);
   const done = ok(await hrC.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE', note: 'All 20 called' })).task;
-  assert.equal(done.late, false); t('HR marks work done the same day (scores 1)');
+  assert.equal(done.late, false); assert.equal(done.status, 'DONE');
+  assert.equal((await pe.call('POST', `/api/tasks/${tk1._id}/update`, { text: 'Changing my update', done: false })).status, 400); t('HR approves the update the same day (scores 1); it is then locked');
   const team = ok(await hrC.call('GET', '/api/tasks'));
   assert.ok(team.people.some((p) => p._id === pv.user._id)); assert.equal(team.tasks.length, 2); t('HR sees the team tasks and assignable people');
 
@@ -367,6 +378,9 @@ try {
   const cronCall = async (path) => { const res = await fetch(BASE + path, { headers: { authorization: 'Bearer cron-secret-for-tests' } }); return { status: res.status, data: await res.json() }; };
   assert.ok(ok(await cronCall('/api/cron/end-of-day')).skipped, 'office still open => nothing closed');
   ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, lateReason: 'Doctor appointment' }));
+  // One task still has no update: checking out is refused until it does
+  const early = await pe.call('POST', '/api/attendance/check-out', {});
+  assert.equal(early.status, 400); assert.equal(early.data.code, 'TASK_UPDATE_REQUIRED'); assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.tasksPending, 1); t('check-out needs an update on every task of the day');
   // Android app: its background service reports location with its own token (no login cookie)
   const trackToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
   const track = async (token, body) => { const res = await fetch(BASE + '/api/attendance/track', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };
