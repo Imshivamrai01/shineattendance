@@ -348,7 +348,9 @@ export async function sendDailyReport(date = dateKey()) {
     const notes = [
       f.late && `Late ${minutesText(f.lateMinutes)}`, f.early && `Left ${minutesText(f.earlyMinutes)} early`,
       r.sessions.some((s) => s.inGeo?.verified === false) && 'Check-in outside office',
+      ...r.sessions.filter((s) => s.lateReason).map((s) => `Late reason: ${s.lateReason}`),
       ...r.sessions.filter((s) => s.reentryReason).map((s) => `Came back ${fmtTime(s.checkIn)}: ${s.reentryReason}`),
+      ...r.sessions.flatMap((s) => (s.breaks || []).map((b) => `Away ${fmtTime(b.outAt)} to ${fmtTime(b.backAt)}: ${b.reason}`)),
     ].filter(Boolean);
     return { p, present: true, first: r.sessions[0]?.checkIn, last: r.sessions.filter((s) => s.checkOut).at(-1)?.checkOut, hrs, sessions: r.sessions.map(sessionText), notes, taskLine, taskList };
   });

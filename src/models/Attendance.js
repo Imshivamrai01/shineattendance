@@ -11,7 +11,10 @@ const session = new Schema({
   corrected: { type: Boolean, default: false },
   autoCheckout: { type: Boolean, default: false },
   endOfDay: { type: Boolean, default: false }, // closed automatically at office closing time
-  reentryReason: String, // why the user came back after leaving the premises
+  reentryReason: String, // (older records) why the user came back after leaving the premises
+  lateReason: String, // why the first check-in of the day was after office start
+  // Auto check-outs that were followed by a return the same day: the session carries on and the time away is kept here.
+  breaks: [new Schema({ outAt: Date, backAt: Date, distance: Number, reason: String, photo: { type: new Schema({ publicId: String, version: Number }, { _id: false }) } }, { _id: false })],
   inPhoto: { type: new Schema({ publicId: String, version: Number }, { _id: false }) },
   outPhoto: { type: new Schema({ publicId: String, version: Number }, { _id: false }) },
   outCount: { type: Number, default: 0 }, firstOutAt: Date,

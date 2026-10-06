@@ -98,6 +98,9 @@ export const GET = handler(async ({ user }) => {
   // Once office hours are over, "not checked in" becomes "absent" (Sunday is the weekly off).
   out.today.closed = afterHours(cfgSettings);
   out.today.weekOff = new Date(`${today}T00:00:00Z`).getUTCDay() === 0;
+  // First check-in of the day after office start: a reason for being late is required.
+  const lateNow = !mine?.sessions?.length ? dayFlags({ sessions: [{ checkIn: new Date() }] }, cfgSettings) : null;
+  out.today.lateMinutes = lateNow?.late && !out.today.closed ? lateNow.lateMinutes : 0;
   if (mine) out.today.flags = dayFlags(mine, cfgSettings);
   if (user.role !== 'EMPLOYEE') out.overview = await overview(user, today, cfgSettings);
 

@@ -15,7 +15,7 @@ export function rowFor(rec, hours, cfg) {
   const s = rec.sessions || [];
   const outs = s.filter((x) => x.checkOut);
   const notes = [
-    f?.late && `late by ${minutesText(f.lateMinutes)}`,
+    f?.late && `late by ${minutesText(f.lateMinutes)}${s[0]?.lateReason ? ` (${s[0].lateReason})` : ''}`,
     f?.early && `left ${minutesText(f.earlyMinutes)} early`,
     s.some((x) => x.autoCheckout) && 'left premises (auto check-out)',
     s.some((x) => x.inGeo?.verified === false) && 'check-in outside geofence',
@@ -26,7 +26,8 @@ export function rowFor(rec, hours, cfg) {
     `${rec.date}|${rec.user?.employeeId || rec.user}`, rec.date, rec.user?.employeeId || '', rec.user?.name || '', rec.user?.role || '', rec.location?.name || '',
     rec.status, ist(s[0]?.checkIn), ist(outs.at(-1)?.checkOut), hours,
     s.map((x) => `${ist(x.checkIn)}-${x.checkOut ? ist(x.checkOut) + (x.autoCheckout ? ' (auto)' : '') : 'open'}`).join(' | '),
-    s.filter((x) => x.reentryReason).map((x) => `${ist(x.checkIn)}: ${x.reentryReason}`).join(' | '),
+    [...s.filter((x) => x.reentryReason).map((x) => `${ist(x.checkIn)}: ${x.reentryReason}`),
+      ...s.flatMap((x) => (x.breaks || []).map((b) => `away ${ist(b.outAt)}-${ist(b.backAt)}: ${b.reason}`))].join(' | '),
     notes, new Date().toISOString(),
   ];
 }

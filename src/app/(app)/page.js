@@ -44,6 +44,7 @@ function AttendanceCard({ data, reload }) {
   const [msg, setMsg] = useState(null);
   const [cam, setCam] = useState(null); // { kind, resolve }
   const [reason, setReason] = useState('');
+  const [lateReason, setLateReason] = useState('');
   const askPhoto = (kind) => new Promise((resolve) => setCam({ kind, resolve }));
   const closeCam = (photo) => { cam.resolve(photo); setCam(null); };
   const act = async (kind) => {
@@ -61,8 +62,8 @@ function AttendanceCard({ data, reload }) {
       }
       const pos = await posPromise;
       if (!pos) { setMsg({ text: 'Could not read your location. Turn on location/GPS and allow it for this site.' }); setBusy(false); return; }
-      await api(`/attendance/${kind}`, { method: 'POST', body: { ...pos, photo, reason: data.today.needsReason ? reason : undefined } });
-      setReason('');
+      await api(`/attendance/${kind}`, { method: 'POST', body: { ...pos, photo, reason: data.today.needsReason ? reason : undefined, lateReason: lateReason.trim() || undefined } });
+      setReason(''); setLateReason('');
       setMsg({ ok: true, text: kind === 'check-in' ? 'Checked in' : 'Checked out' });
       window.dispatchEvent(new Event('attendance:changed')); // start / stop location tracking now
       reload();
@@ -108,8 +109,14 @@ function AttendanceCard({ data, reload }) {
           <textarea rows={2} style={{ marginTop: 8 }} placeholder="Reason (e.g. client visit, lunch, personal work)" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       )}
+      {t.lateMinutes > 0 && !t.checkedIn && (
+        <div className="alert warn" style={{ marginTop: 12 }}>
+          <b>You are {minutesText(t.lateMinutes)} late.</b> Enter the reason to check in.
+          <textarea rows={2} style={{ marginTop: 8 }} placeholder="Reason for being late (e.g. traffic, doctor visit, client call)" value={lateReason} onChange={(e) => setLateReason(e.target.value)} maxLength={300} />
+        </div>
+      )}
       <div className="att-actions">
-        <button className="btn primary big" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3)} onClick={() => act('check-in')}>{busy && !t.checkedIn ? 'Please wait…' : 'Check in'}</button>
+        <button className="btn primary big" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3) || (t.lateMinutes > 0 && lateReason.trim().length < 3)} onClick={() => act('check-in')}>{busy && !t.checkedIn ? 'Please wait…' : 'Check in'}</button>
         <button className="btn big" disabled={busy || !t.checkedIn} onClick={() => act('check-out')}>{busy && t.checkedIn ? 'Please wait…' : 'Check out'}</button>
       </div>
       {away && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>You appear to be leaving the office. Stay within range or you will be checked out.</div>}

@@ -35,7 +35,7 @@ export const GET = handler(async ({ req, user, params }) => {
     else status = 'ABSENT';
     days.push({
       date, weekday, status, hours: r && r.status === 'ACTIVE' ? hoursWorked(r) : 0, voidReason: r?.voidReason, flags: r && r.status === 'ACTIVE' ? dayFlags(r, cfg) : undefined,
-      sessions: (r?.sessions || []).map(({ inPhoto, outPhoto, ...s }) => ({ ...s, inPhotoUrl: photoUrl(inPhoto), outPhotoUrl: photoUrl(outPhoto) })),
+      sessions: (r?.sessions || []).map(({ inPhoto, outPhoto, breaks, ...s }) => ({ ...s, inPhotoUrl: photoUrl(inPhoto), outPhotoUrl: photoUrl(outPhoto), breaks: (breaks || []).map(({ photo, ...b }) => b) })),
     });
   }
 

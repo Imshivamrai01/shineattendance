@@ -2,7 +2,7 @@ import { M, getSettings } from './db.js';
 import { audit } from './audit.js';
 import { bad, notFound, HttpError } from './http.js';
 import { dateKey } from './dates.js';
-import { afterHours, closingTime, hoursCfg, label12 } from './hours.js';
+import { afterHours, closingTime, dayFlags, hoursCfg, label12, minutesText } from './hours.js';
 import { distanceMeters } from './geo.js';
 import { photosEnabled, uploadAttendancePhoto } from './cloudinary.js';
 import { queueSheetSync } from './sheetSync.js';
@@ -73,25 +73,40 @@ export async function checkIn(ctx, coords) {
   // After leaving the premises (auto check-out) the user must give a reason to check in again.
   const todays = await M.Attendance.findOne({ user: user._id, date }).lean();
   const prev = todays?.status === 'ACTIVE' ? todays.sessions.at(-1) : null;
-  let reentryReason;
-  if (prev?.autoCheckout && prev.checkOut) {
+  const resume = !!(prev?.autoCheckout && prev.checkOut);
+  let reentryReason, lateReason;
+  if (resume) {
     reentryReason = String(coords?.reason || '').trim().slice(0, 300);
     if (reentryReason.length < 3) throw new HttpError(400, 'You left the office. Enter a reason to check in again.', { code: 'REASON_REQUIRED' });
+  }
+  const now = new Date();
+  // First check-in of the day after office start (+ grace): the person must say why they are late.
+  const late = !todays?.sessions?.length ? dayFlags({ sessions: [{ checkIn: now }] }, cfg) : null;
+  if (late?.late) {
+    lateReason = String(coords?.lateReason || '').trim().slice(0, 300);
+    if (lateReason.length < 3) throw new HttpError(400, `You are ${minutesText(late.lateMinutes)} late. Enter the reason for being late.`, { code: 'LATE_REASON_REQUIRED' });
   }
   // Live camera photo (only present when captured in the app; the server can't tell camera from file, so the UI offers camera only).
   const inPhoto = photosEnabled() ? await uploadAttendancePhoto(coords?.photo, { userId: user._id, kind: 'in' }) : undefined;
   await M.Attendance.updateOne({ user: user._id, date }, { $setOnInsert: { user: user._id, date, sessions: [] } }, { upsert: true });
-  const now = new Date();
-  const r = await M.Attendance.updateOne(
-    { user: user._id, date, status: 'ACTIVE', sessions: { $not: { $elemMatch: { checkOut: null } } } },
-    { $push: { sessions: { checkIn: now, inGeo: geo, inPhoto, reentryReason } }, ...(location ? { $set: { location } } : {}) });
+  const allClosed = { user: user._id, date, status: 'ACTIVE', sessions: { $not: { $elemMatch: { checkOut: null } } } };
+  const r = resume
+    // Back after an automatic check-out: the earlier session carries on from its original check-in time.
+    // The time away is recorded (with the reason and the return photo) but still counts as working time.
+    ? await M.Attendance.updateOne(allClosed,
+      { $set: { 'sessions.$[s].autoCheckout': false }, $unset: { 'sessions.$[s].checkOut': '', 'sessions.$[s].outGeo': '' },
+        $push: { 'sessions.$[s].breaks': { outAt: prev.checkOut, backAt: now, distance: prev.outGeo?.distance, reason: reentryReason, photo: inPhoto } } },
+      { arrayFilters: [{ 's._id': prev._id }] })
+    : await M.Attendance.updateOne(allClosed,
+      { $push: { sessions: { checkIn: now, inGeo: geo, inPhoto, lateReason } }, ...(location ? { $set: { location } } : {}) });
   if (!r.modifiedCount) {
     const doc = await M.Attendance.findOne({ user: user._id, date }).lean();
     throw new HttpError(409, doc?.status === 'VOIDED'
       ? 'Today\'s attendance record was voided. Contact HR or Admin.' : 'You are already checked in');
   }
   const rec = await M.Attendance.findOne({ user: user._id, date }).lean();
-  if (reentryReason) await audit(ctx, { action: 'REENTRY_CHECKIN', entityType: 'Attendance', entityId: rec._id, subjectId: user._id, department: user.department, newData: { checkIn: now }, reason: reentryReason });
+  if (reentryReason) await audit(ctx, { action: 'REENTRY_CHECKIN', entityType: 'Attendance', entityId: rec._id, subjectId: user._id, department: user.department, oldData: { checkOut: prev.checkOut, distance: prev.outGeo?.distance }, newData: { back: now, sessionContinuesFrom: prev.checkIn }, reason: reentryReason });
+  if (lateReason) await audit(ctx, { action: 'LATE_CHECKIN', entityType: 'Attendance', entityId: rec._id, subjectId: user._id, department: user.department, newData: { checkIn: now, lateMinutes: late.lateMinutes }, reason: lateReason });
   queueSheetSync(rec._id);
   if (reentryReason) notifyReentry({ userId: user._id, reason: reentryReason, at: now });
   notifyCheckin({ userId: user._id, recId: rec._id, at: now, distance: geo?.distance });

@@ -20,6 +20,8 @@ function Sessions({ day }) {
       {s.corrected && <Badge tone="warn">corrected</Badge>}
       {s.autoCheckout && <Badge tone="warn">auto out</Badge>}
       {s.endOfDay && <Badge>office closed</Badge>}
+      {s.lateReason && <span className="muted small">Late: {s.lateReason}</span>}
+      {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}: {b.reason}</span>)}
       {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
     </div>
   ));

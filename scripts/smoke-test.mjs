@@ -91,7 +91,12 @@ try {
   ok(await e.call('POST', '/api/auth/change-password', { currentPassword: emp.tempPassword, newPassword: 'Employee#Pass1' }));
   const far = await e.call('POST', '/api/attendance/check-in', { lat: 28.6, lng: 77.2 });
   assert.equal(far.status, 403); t('check-in outside geofence blocked');
-  ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733 })); t('check-in inside geofence');
+  // Office start is 00:01 in this test, so the first check-in of the day is late and needs a reason
+  assert.ok(ok(await e.call('GET', '/api/dashboard')).today.lateMinutes > 0);
+  const noLate = await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733 });
+  assert.equal(noLate.status, 400); assert.equal(noLate.data.code, 'LATE_REASON_REQUIRED');
+  const first = ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, lateReason: 'Bike broke down on the way' })).record;
+  assert.equal(first.sessions[0].lateReason, 'Bike broke down on the way'); assert.equal(ok(await e.call('GET', '/api/dashboard')).today.lateMinutes, 0); t('check-in inside geofence; late check-in needs a reason');
   assert.equal((await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733 })).status, 409); t('double check-in blocked');
   ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 })); t('check-out');
 
@@ -113,7 +118,11 @@ try {
   const noReason = await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 });
   assert.equal(noReason.status, 400); assert.equal(noReason.data.code, 'REASON_REQUIRED');
   assert.equal((await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'ab' })).status, 400);
-  ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Went out for a client meeting' })); t('re-check-in after leaving premises requires a reason');
+  const back = ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Went out for a client meeting' })).record; t('re-check-in after leaving premises requires a reason');
+  // ...and the earlier session carries on from its original check-in time: no new session, time away recorded
+  const resumed = back.sessions.at(-1);
+  assert.equal(back.sessions.length, 2); assert.equal(resumed.checkOut, undefined); assert.equal(resumed.autoCheckout, false);
+  assert.equal(resumed.breaks.length, 1); assert.equal(resumed.breaks[0].reason, 'Went out for a client meeting'); assert.ok(resumed.breaks[0].outAt && resumed.breaks[0].backAt); t('back after auto check-out: the old session continues, time away logged');
   ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 }));
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 })); t('no reason needed after a normal check-out');
   // ~155 m away with a good fix (e.g. the app reopened at home): checked out on the very first ping
@@ -152,7 +161,7 @@ try {
   ok(await admin.call('PATCH', `/api/attendance/${att._id}`, { sessionId: s._id, checkOut: newOut, reason: 'Verified attendance issue' })); t('admin corrected checkout');
   ok(await admin.call('DELETE', `/api/attendance/${att._id}`, { reason: 'Duplicate record' }));
   const voided = ok(await admin.call('GET', '/api/attendance')).items[0];
-  assert.equal(voided.status, 'VOIDED'); assert.equal(voided.sessions.length, 4); t('void keeps the record');
+  assert.equal(voided.status, 'VOIDED'); assert.equal(voided.sessions.length, 3); t('void keeps the record');
 
   // Attendance correction request -> admin override
   const att2 = new Client(); void att2;
@@ -344,7 +353,7 @@ try {
   assert.equal((await admin.call('GET', '/api/cron/daily-report')).status, 401); t('cron endpoints reject requests without the secret');
   const cronCall = async (path) => { const res = await fetch(BASE + path, { headers: { authorization: 'Bearer cron-secret-for-tests' } }); return { status: res.status, data: await res.json() }; };
   assert.ok(ok(await cronCall('/api/cron/end-of-day')).skipped, 'office still open => nothing closed');
-  ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5,  }));
+  ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, lateReason: 'Doctor appointment' }));
   // Android app: its background service reports location with its own token (no login cookie)
   const trackToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
   const track = async (token, body) => { const res = await fetch(BASE + '/api/attendance/track', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };
