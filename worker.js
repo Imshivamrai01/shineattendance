@@ -2,6 +2,7 @@
 import handler from './.open-next/worker.js';
 
 const CRON_PATHS = {
+  '*/5 * * * *': '/api/cron/silent-check', // phones that stopped reporting location (only acts during office hours)
   '*/15 12-15 * * *': '/api/cron/end-of-day', // 17:30-21:15 IST: auto check-out once office hours are over
   '30 14 * * *': '/api/cron/daily-report', // 20:00 IST: finalize tasks + report email
 };

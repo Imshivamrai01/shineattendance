@@ -23,7 +23,7 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', OUT_SECONDS_TO_CHECKOUT: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', OUT_SECONDS_TO_CHECKOUT: '0', SILENT_MINUTES_TO_CHECKOUT: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
 const wa = startWaMock(3999);
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
@@ -392,6 +392,17 @@ try {
   // One task still has no update: checking out is refused until it does
   const early = await pe.call('POST', '/api/attendance/check-out', {});
   assert.equal(early.status, 400); assert.equal(early.data.code, 'TASK_UPDATE_REQUIRED'); assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.tasksPending, 1); t('check-out needs an update on every task of the day');
+  // A phone that stops reporting its location is checked out, at the time of its last report; coming back resumes the session
+  const before = ok(await pe.call('GET', '/api/dashboard')).today.record.sessions.at(-1);
+  assert.ok(before.lastPingAt, 'check-in counts as a location report');
+  assert.equal(ok(await cronCall('/api/cron/silent-check')).closed, 1);
+  const gone = ok(await pe.call('GET', '/api/dashboard')).today;
+  assert.equal(gone.checkedIn, false); assert.equal(gone.needsReason, true);
+  assert.equal(gone.record.sessions.at(-1).silent, true); assert.equal(gone.record.sessions.at(-1).checkOut, before.lastPingAt);
+  await wait(600);
+  assert.ok(ok(await pe.call('GET', '/api/notifications')).items.some((n) => /location stopped/.test(n.title)));
+  const again = ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Phone closed the app' })).record;
+  assert.equal(again.sessions.length, 1); assert.equal(again.sessions[0].silent, false); assert.match(again.sessions[0].breaks[0].reason, /location stopped/); t('no location for too long => checked out at the last report; return resumes the session');
   // Android app: its background service reports location with its own token (no login cookie)
   const trackToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
   const track = async (token, body) => { const res = await fetch(BASE + '/api/attendance/track', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };

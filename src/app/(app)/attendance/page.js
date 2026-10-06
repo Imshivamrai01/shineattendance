@@ -142,7 +142,7 @@ export default function Attendance() {
                       <div><b>{fmtTime(s.checkIn)}</b> <span className="muted">→</span> <b>{s.checkOut ? fmtTime(s.checkOut) : 'in office'}</b></div>
                       <div className="row att-flags">
                         {s.corrected && <Badge tone="warn">corrected</Badge>}
-                        {s.autoCheckout && <Badge tone="warn">left office</Badge>}
+                        {s.autoCheckout && <Badge tone="warn">{s.silent ? 'location stopped' : 'left office'}</Badge>}
                         {s.endOfDay && <Badge>office closed</Badge>}
                         {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
                         {s.reentryReason && <span className="muted small">Back: {s.reentryReason}</span>}

@@ -25,7 +25,7 @@ export function rowFor(rec, hours, cfg) {
   return [
     `${rec.date}|${rec.user?.employeeId || rec.user}`, rec.date, rec.user?.employeeId || '', rec.user?.name || '', rec.user?.role || '', rec.location?.name || '',
     rec.status, ist(s[0]?.checkIn), ist(outs.at(-1)?.checkOut), hours,
-    s.map((x) => `${ist(x.checkIn)}-${x.checkOut ? ist(x.checkOut) + (x.autoCheckout ? ' (auto)' : '') : 'open'}`).join(' | '),
+    s.map((x) => `${ist(x.checkIn)}-${x.checkOut ? ist(x.checkOut) + (x.silent ? ' (location stopped)' : x.autoCheckout ? ' (auto)' : '') : 'open'}`).join(' | '),
     [...s.filter((x) => x.reentryReason).map((x) => `${ist(x.checkIn)}: ${x.reentryReason}`),
       ...s.flatMap((x) => (x.breaks || []).map((b) => `away ${ist(b.outAt)}-${ist(b.backAt)}: ${b.reason}`))].join(' | '),
     notes, new Date().toISOString(),

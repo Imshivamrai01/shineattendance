@@ -2,7 +2,7 @@ import { M, getSettings } from './db.js';
 import { audit } from './audit.js';
 import { bad, notFound, HttpError } from './http.js';
 import { dateKey } from './dates.js';
-import { afterHours, closingTime, dayFlags, hoursCfg, inLunch, label12, minutesText, workedHours } from './hours.js';
+import { afterHours, closingTime, dayFlags, hoursCfg, inLunch, label12, lunchEndTime, minutesText, workedHours } from './hours.js';
 import { distanceMeters } from './geo.js';
 import { photosEnabled, uploadAttendancePhoto } from './cloudinary.js';
 import { queueSheetSync } from './sheetSync.js';
@@ -14,6 +14,8 @@ const IGNORE_PING_ACCURACY_M = 50;  // ...and are ignored when deciding to auto 
 const OUT_PINGS_TO_CHECKOUT = 3;    // consecutive out-of-range pings (avoids one-off GPS jumps)
 // ...and they must span this long, so one bad reading (or two reports arriving together) can't check someone out.
 const OUT_SECONDS_TO_CHECKOUT = process.env.OUT_SECONDS_TO_CHECKOUT != null ? Number(process.env.OUT_SECONDS_TO_CHECKOUT) : 60;
+// A checked-in phone that sends no location for this long is checked out, at the time of its last report.
+const SILENT_MINUTES_TO_CHECKOUT = process.env.SILENT_MINUTES_TO_CHECKOUT != null ? Number(process.env.SILENT_MINUTES_TO_CHECKOUT) : 20;
 const CLEARLY_AWAY_M = 100;         // this far with a precise GPS fix = left for sure: check out on the first ping
 const PRECISE_FIX_M = 25;           // indoors, cell-tower / Wi-Fi fixes claim 30-50 m and can be hundreds of metres off
 
@@ -94,11 +96,11 @@ export async function checkIn(ctx, coords) {
     // Back after an automatic check-out: the earlier session carries on from its original check-in time.
     // The time away is recorded (with the reason and the return photo) and deducted from the hours, except during lunch.
     ? await M.Attendance.updateOne(allClosed,
-      { $set: { 'sessions.$[s].autoCheckout': false }, $unset: { 'sessions.$[s].checkOut': '', 'sessions.$[s].outGeo': '' },
-        $push: { 'sessions.$[s].breaks': { outAt: prev.checkOut, backAt: now, distance: prev.outGeo?.distance, reason: reentryReason, photo: inPhoto } } },
+      { $set: { 'sessions.$[s].autoCheckout': false, 'sessions.$[s].silent': false, 'sessions.$[s].lastPingAt': now }, $unset: { 'sessions.$[s].checkOut': '', 'sessions.$[s].outGeo': '' },
+        $push: { 'sessions.$[s].breaks': { outAt: prev.checkOut, backAt: now, distance: prev.outGeo?.distance, reason: prev.silent ? `(location stopped) ${reentryReason}` : reentryReason, photo: inPhoto } } },
       { arrayFilters: [{ 's._id': prev._id }] })
     : await M.Attendance.updateOne(allClosed,
-      { $push: { sessions: { checkIn: now, inGeo: geo, inPhoto, lateReason } }, ...(location ? { $set: { location } } : {}) });
+      { $push: { sessions: { checkIn: now, inGeo: geo, inPhoto, lateReason, lastPingAt: now } }, ...(location ? { $set: { location } } : {}) });
   if (!r.modifiedCount) {
     const doc = await M.Attendance.findOne({ user: user._id, date }).lean();
     throw new HttpError(409, doc?.status === 'VOIDED'
@@ -181,6 +183,38 @@ export async function ping(ctx, coords) {
   queueSheetSync(rec._id);
   notifyCheckout({ userId: user._id, recId: rec._id, at: session.checkOut, auto: true, distance });
   return { open: false, autoCheckedOut: true, distance, limit };
+}
+
+/**
+ * Scheduled every few minutes during office hours: someone whose phone has sent no location for
+ * SILENT_MINUTES_TO_CHECKOUT is checked out, and the check-out time is their last location report
+ * (the moment we stopped knowing where they were). Lunch never counts as silence.
+ */
+export async function silentCheckout(ctx) {
+  const cfg = await getSettings();
+  if (afterHours(cfg)) return { skipped: 'office is closed' };
+  if (inLunch(cfg)) return { skipped: 'lunch break' };
+  const today = dateKey(), now = Date.now(), lunchEnd = lunchEndTime(today, cfg).getTime();
+  const open = await M.Attendance.find({ date: today, status: 'ACTIVE', 'sessions.checkOut': null });
+  let closed = 0;
+  for (const rec of open) {
+    const s = rec.sessions.find((x) => !x.checkOut);
+    if (!s?.lastPingAt) continue; // session from before this rule existed
+    const last = new Date(s.lastPingAt).getTime();
+    // Silence that started before lunch ended only counts from the end of lunch.
+    const since = last < lunchEnd && now >= lunchEnd ? lunchEnd : last;
+    if (now - since < SILENT_MINUTES_TO_CHECKOUT * 60000) continue;
+    s.checkOut = new Date(Math.max(last, new Date(s.checkIn).getTime()));
+    s.autoCheckout = true; s.silent = true; s.outCount = 0; s.firstOutAt = undefined;
+    s.outGeo = { distance: s.lastPingDistance, verified: false };
+    await rec.save();
+    await audit(ctx, { raw: true, action: 'AUTO_CHECKOUT', entityType: 'Attendance', entityId: rec._id, subjectId: rec.user,
+      newData: { checkOut: s.checkOut, silentMinutes: Math.round((now - last) / 60000) }, reason: `No location from the phone since ${label12(new Date(last + 330 * 60000).toISOString().slice(11, 16))}` });
+    queueSheetSync(rec._id);
+    notifyCheckout({ userId: rec.user, recId: rec._id, at: s.checkOut, auto: true, silent: true });
+    closed++;
+  }
+  return { closed };
 }
 
 /** Close every open session of a record at office closing time (or now, if that is earlier). */

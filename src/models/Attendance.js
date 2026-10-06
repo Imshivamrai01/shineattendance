@@ -11,6 +11,7 @@ const session = new Schema({
   corrected: { type: Boolean, default: false },
   autoCheckout: { type: Boolean, default: false },
   endOfDay: { type: Boolean, default: false }, // closed automatically at office closing time
+  silent: { type: Boolean, default: false }, // closed because the phone stopped reporting its location (check-out = last report)
   reentryReason: String, // (older records) why the user came back after leaving the premises
   lastPingAt: Date, lastPingDistance: Number, // most recent location report while checked in (shows when a phone stops reporting)
   lateReason: String, // why the first check-in of the day was after office start

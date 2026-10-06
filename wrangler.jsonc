@@ -13,7 +13,7 @@
   ],
   "workers_dev": true,
   // UTC schedules, mapped to routes in worker.js `scheduled` (see CRON_PATHS)
-  "triggers": { "crons": ["*/15 12-15 * * *", "30 14 * * *"] },
+  "triggers": { "crons": ["*/5 * * * *", "*/15 12-15 * * *", "30 14 * * *"] },
   "vars": {
     "APP_URL": "https://attendance.shineinfosolutions.in",
     "SESSION_HOURS": "8",

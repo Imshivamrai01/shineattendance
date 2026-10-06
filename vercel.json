@@ -1,5 +1,6 @@
 {
   "crons": [
+    { "path": "/api/cron/silent-check", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/end-of-day", "schedule": "*/15 12-15 * * *" },
     { "path": "/api/cron/daily-report", "schedule": "30 14 * * *" }
   ]

@@ -57,3 +57,6 @@ export function workedHours(rec, cfg) {
   }
   return Math.round((Math.max(0, ms) / 3600000) * 100) / 100;
 }
+
+/** The instant lunch ends on an IST date key. */
+export const lunchEndTime = (dateKey, cfg) => new Date(`${dateKey}T${lunchCfg(cfg).lunchEnd}:00+05:30`);

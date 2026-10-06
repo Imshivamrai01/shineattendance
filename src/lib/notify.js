@@ -129,8 +129,9 @@ export function notifyCheckin({ userId, recId, at, distance }) {
   });
 }
 
-export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = false, distance }) {
-  if (auto) note(userId, { title: 'You were checked out automatically', body: `You moved ${distance ?? 'away'} m from the office at ${fmtTime(at)}. To check in again you will need to give a reason.`, link: '/' });
+export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = false, silent = false, distance }) {
+  if (silent) note(userId, { title: 'You were checked out: location stopped', body: `Your phone stopped sharing its location at ${fmtTime(at)}, so you were checked out from that time. Open the app and check in again with a reason. Keep the app allowed to run in the background.`, link: '/' });
+  else if (auto) note(userId, { title: 'You were checked out automatically', body: `You moved ${distance ?? 'away'} m from the office at ${fmtTime(at)}. To check in again you will need to give a reason.`, link: '/' });
   else if (endOfDay) note(userId, { title: 'Checked out at office closing', body: `Office hours are over, so you were checked out at ${fmtTime(at)}.`, link: '/attendance' });
   queue('check-out', async () => {
     const [u, rec, cfg] = await Promise.all([M.User.findById(userId).select('name email employeeId').lean(), M.Attendance.findById(recId).lean(), getSettings()]);
@@ -143,6 +144,12 @@ export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = fal
         tone: 'info', title: 'Checked out at office closing', greeting: `Hi ${nameOf(u)},`, intro: `Office hours ended at ${label12(c.workEnd)}, so you were checked out automatically.`,
         highlight: `Out at ${fmtTime(at)}`, rows: [['Date', fmtDay(at)], ['Total hours today', hm(hrs)]], link: link('/attendance'), linkText: 'View my attendance',
       })
+      : silent
+      ? layout({
+        tone: 'warn', title: 'Checked out: your phone stopped sharing location', greeting: `Hi ${nameOf(u)},`, intro: `We stopped receiving your location at ${fmtTime(at)}, so your attendance was closed from that time.`,
+        highlight: `Out at ${fmtTime(at)}`, rows: [['Date', fmtDay(at)], ['Hours so far today', hm(hrs)]],
+        notes: ['If you are still at the office, open the app and check in again with a reason.', 'To stop this happening, allow Shine Attendance to run in the background: turn off battery optimisation for the app, allow Auto launch, and set Location to "Allow all the time".'], link: link('/'), linkText: 'Open app',
+      })
       : auto
       ? layout({
         tone: 'warn', title: 'You were checked out automatically', greeting: `Hi ${nameOf(u)},`, intro: `You moved ${distance ?? 'more than 20'} m away from the office, so your attendance was closed at ${fmtTime(at)}.`,
@@ -154,7 +161,7 @@ export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = fal
         rows: [['Date', fmtDay(at)], ['Total hours today', hm(hrs)], ['Office ends', label12(c.workEnd)]],
         notes: f.early ? [`You left ${minutesText(f.earlyMinutes)} before the office end time (${label12(c.workEnd)}).`] : [], link: link('/attendance'), linkText: 'View my attendance',
       });
-    await sendMail({ to: u.email, subject: endOfDay ? `Checked out at office closing (${fmtTime(at)})` : auto ? 'You were checked out automatically (left the office)' : `Checked out at ${fmtTime(at)}`, ...m });
+    await sendMail({ to: u.email, subject: endOfDay ? `Checked out at office closing (${fmtTime(at)})` : silent ? `Checked out: location stopped at ${fmtTime(at)}` : auto ? 'You were checked out automatically (left the office)' : `Checked out at ${fmtTime(at)}`, ...m });
     const lead = await everyCheckinRecipients(u);
     if (lead.length) {
       const l = layout({ tone: auto ? 'warn' : 'info', title: `${u.name} ${auto ? 'left the office' : 'checked out'}`, intro: `${idOf(u)} ${auto ? 'was checked out automatically' : 'checked out'} at ${fmtTime(at)}. Hours today: ${hm(hrs)}.`, link: link('/attendance'), linkText: 'Open attendance' });
@@ -316,7 +323,7 @@ export function notifyLockout({ userId, ip }) {
 // ---------- 5. Scheduled: evening report (only to the report address) ----------
 const TD = 'padding:8px 10px;border-top:1px solid #e6e9f1;vertical-align:top;font-size:13px';
 const TH = 'padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7489;background:#fafbfe';
-const sessionText = (s) => `${fmtTime(s.checkIn)} – ${s.checkOut ? fmtTime(s.checkOut) : 'still in'}${s.autoCheckout ? ' (left office)' : s.endOfDay ? ' (office closed)' : ''}${s.corrected ? ' (corrected)' : ''}`;
+const sessionText = (s) => `${fmtTime(s.checkIn)} – ${s.checkOut ? fmtTime(s.checkOut) : 'still in'}${s.silent ? ' (location stopped)' : s.autoCheckout ? ' (left office)' : s.endOfDay ? ' (office closed)' : ''}${s.corrected ? ' (corrected)' : ''}`;
 
 /** Detailed day report: who came, when they came and left, hours, flags and task status. */
 export async function sendDailyReport(date = dateKey()) {

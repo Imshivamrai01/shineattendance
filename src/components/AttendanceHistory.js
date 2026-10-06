@@ -18,7 +18,7 @@ function Sessions({ day }) {
       <span>{fmtTime(s.checkIn)} – {fmtTime(s.checkOut)}</span>
       {s.outPhotoUrl && <a href={s.outPhotoUrl} target="_blank" rel="noreferrer"><img className="thumb" src={s.outPhotoUrl} alt="Out" /></a>}
       {s.corrected && <Badge tone="warn">corrected</Badge>}
-      {s.autoCheckout && <Badge tone="warn">auto out</Badge>}
+      {s.autoCheckout && <Badge tone="warn">{s.silent ? 'location stopped' : 'auto out'}</Badge>}
       {s.endOfDay && <Badge>office closed</Badge>}
       {s.lateReason && <span className="muted small">Late: {s.lateReason}</span>}
       {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}{b.deductedMinutes ? ` (${minutesText(b.deductedMinutes)} not counted)` : ' (lunch, counted)'}: {b.reason}</span>)}
