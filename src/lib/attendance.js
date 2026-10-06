@@ -151,8 +151,13 @@ export async function ping(ctx, coords) {
     await closeAtEndOfDay(ctx, rec, cfg);
     return { open: false, autoCheckedOut: true, endOfDay: true };
   }
-  if (inLunch(cfg)) return { open: true, lunch: true };
   const loc = rec.location ? await M.Location.findById(rec.location).lean() : null;
+  const current = rec.sessions.find((s) => !s.checkOut);
+  if (c.ok && (!current.lastPingAt || Date.now() - new Date(current.lastPingAt).getTime() >= 60000)) {
+    await M.Attendance.updateOne({ _id: rec._id }, { $set: { 'sessions.$[s].lastPingAt': new Date(),
+      ...(loc ? { 'sessions.$[s].lastPingDistance': Math.round(distanceMeters(c.lat, c.lng, loc.latitude, loc.longitude)) } : {}) } }, { arrayFilters: [{ 's.checkOut': null }] });
+  }
+  if (inLunch(cfg)) return { open: true, lunch: true };
   if (!loc || !c.ok || (c.accuracy != null && c.accuracy > IGNORE_PING_ACCURACY_M)) return { open: true, ignored: true };
   const session = rec.sessions.find((s) => !s.checkOut);
   const distance = Math.round(distanceMeters(c.lat, c.lng, loc.latitude, loc.longitude));

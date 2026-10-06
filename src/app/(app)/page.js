@@ -218,6 +218,7 @@ function Overview({ me, d }) {
     o.attention.lateToday > 0 && { text: `${o.attention.lateToday} ${o.attention.lateToday === 1 ? 'person' : 'people'} checked in late today`, href: '/attendance' },
     o.attention.outsideToday > 0 && { text: `${o.attention.outsideToday} check-in(s) today were outside the geofence`, href: '/attendance' },
     o.attention.autoCheckoutToday > 0 && { text: `${o.attention.autoCheckoutToday} auto check-out(s) today (left the office)`, href: '/attendance' },
+    o.attention.silentNow > 0 && { text: `${o.attention.silentNow} checked-in ${o.attention.silentNow === 1 ? 'phone is' : 'phones are'} not sending location (app closed or stopped by the phone)`, href: '/attendance' },
   ].filter(Boolean);
   const maxDept = Math.max(1, ...o.departments.map((x) => x.n));
 
@@ -243,7 +244,7 @@ function Overview({ me, d }) {
           <div className="row between"><h2>Today's attendance</h2><Link className="small" href="/attendance">View all</Link></div>
           {o.present.length === 0 ? <p className="muted">Nobody has checked in yet today.</p> : o.present.map((p) => (
             <Person key={p.id} name={p.name} photo={p.photo} sub={`${p.employeeId || ''} · in ${fmtTime(p.checkIn)}${p.checkOut ? ` · out ${fmtTime(p.checkOut)}` : ''}`}
-              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Checked out</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
+              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Checked out</Badge>}{p.open && p.silentMinutes > 0 && !d.office?.lunchNow && <Badge tone="bad">No location {minutesText(p.silentMinutes)}</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
           ))}
         </div>
         <div className="card">

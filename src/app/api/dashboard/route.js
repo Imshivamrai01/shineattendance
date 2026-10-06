@@ -9,6 +9,13 @@ import { afterHours, dayFlags, hoursCfg, inLunch, lunchCfg } from '@/lib/hours';
 
 const PENDING = ['PENDING_HR', 'PENDING_MANAGER', 'PENDING_COO', 'PENDING_ADMIN'];
 
+const SILENT_AFTER_MIN = 10;
+function silentFor(session) {
+  if (!session) return 0;
+  const mins = Math.floor((Date.now() - new Date(session.lastPingAt || session.checkIn).getTime()) / 60000);
+  return mins >= SILENT_AFTER_MIN ? mins : 0;
+}
+
 async function overview(user, today, cfg) {
   // Everyone this user oversees (Admin: everyone except Admin accounts).
   const team = await M.User.find({ $and: [scopeFilter(user), { status: 'ACTIVE', role: { $ne: 'ADMIN' }, _id: { $ne: user._id } }] })
@@ -23,10 +30,13 @@ async function overview(user, today, cfg) {
     return {
       id: String(r._id), name: u?.name, employeeId: u?.employeeId, role: u?.role,
       checkIn: first?.checkIn, checkOut: last?.checkOut, open: r.sessions.some((s) => !s.checkOut),
+      // Checked in but the phone has not reported its location for a while: nobody can tell whether they are still in the office.
+      silentMinutes: silentFor(r.sessions.find((s) => !s.checkOut)),
       outside: r.sessions.some((s) => s.inGeo?.verified === false), auto: r.sessions.some((s) => s.autoCheckout),
       photo: photoUrl(first?.inPhoto), flags: dayFlags(r, cfg),
     };
   }).sort((a, b) => new Date(b.checkIn) - new Date(a.checkIn));
+  const cfgLunch = inLunch(cfg);
   const presentIds = new Set(recs.map((r) => String(r.user)));
   const absent = team.filter((u) => !presentIds.has(String(u._id)))
     .map((u) => ({ id: String(u._id), name: u.name, employeeId: u.employeeId, role: u.role, department: u.department?.name }));
@@ -58,6 +68,7 @@ async function overview(user, today, cfg) {
       outsideToday: present.filter((p) => p.outside).length,
       lateToday: present.filter((p) => p.flags.late).length,
       autoCheckoutToday: present.filter((p) => p.auto).length,
+      silentNow: cfgLunch ? 0 : present.filter((p) => p.open && p.silentMinutes).length,
     },
     departments: Object.entries(deptCount).map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n),
   };
