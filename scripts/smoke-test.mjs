@@ -119,7 +119,9 @@ try {
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
   // a far-away reading that is not a precise GPS fix (cell tower / Wi-Fi) is never enough on its own
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true); // back inside: counter resets
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 40 })).warning, true);
+  for (let i = 0; i < 4; i++) assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7650, lng: 83.3732, accuracy: 40 })).uncertain, true); // 490 m "away", rough fix: ignored however often
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7650, lng: 83.3732, accuracy: 40 })).uncertain, true); // a rough fix in between does not help or hurt
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('moving beyond checkout radius auto checks out');
   assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732 })).open, false);
@@ -139,8 +141,10 @@ try {
   assert.equal(resumed.breaks.length, 1); assert.equal(resumed.breaks[0].reason, 'Went out for a client meeting'); assert.ok(resumed.breaks[0].outAt && resumed.breaks[0].backAt); t('back after auto check-out: the old session continues, time away logged');
   ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 }));
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 })); t('no reason needed after a normal check-out');
-  // ~155 m away with a good fix (e.g. the app reopened at home): checked out on the very first ping
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('clearly away => immediate auto check-out');
+  // ~155 m away with a good fix (e.g. the app reopened at home): still needs three precise reports, never just one
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).warning, true);
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).warning, true);
+  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('far away => auto check-out only after three precise reports');
 
   // Employee cannot use admin APIs or see others
   assert.equal((await e.call('GET', '/api/audit-logs')).status, 403);
