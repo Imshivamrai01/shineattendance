@@ -45,21 +45,32 @@ function AssignModal({ people, date, onClose }) {
   );
 }
 
-function UpdateModal({ task, onClose }) {
+function UpdateModal({ task, people = [], onClose }) {
+  const [userId, setUserId] = useState(task.user?._id || '');
+  const moved = userId !== (task.user?._id || '');
+  const reviewed = ['DONE', 'NOT_DONE'].includes(task.status);
   const [status, setStatus] = useState(['PENDING', 'SUBMITTED'].includes(task.status) ? 'DONE' : task.status);
   const [note, setNote] = useState(task.note || '');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async (body) => {
     setBusy(true); setErr('');
-    try { await api(`/tasks/${task._id}`, { method: body ? 'DELETE' : 'PATCH', body: body ? undefined : { status, note } }); onClose(true); } catch (x) { setErr(x.message); setBusy(false); }
+    try { await api(`/tasks/${task._id}`, { method: body ? 'DELETE' : 'PATCH', body: body ? undefined : (moved ? { userId } : { status, note }) }); onClose(true); } catch (x) { setErr(x.message); setBusy(false); }
   };
   return (
     <Modal title="Review task" onClose={() => onClose(false)}>
       <p style={{ marginTop: 0 }}><b>{task.title}</b><br /><span className="muted small">{task.user?.name} · {dayLabel(task.date)}</span></p>
       <TaskPoints details={task.details} />
-      {task.update?.text ? <TaskUpdate update={task.update} /> : <div className="alert warn" style={{ marginTop: 10 }}>{task.user?.name?.split(' ')[0] || 'They'} has not added an update on this task yet.</div>}
-      <div style={{ marginTop: 12 }}><Field label="Your decision">
+      {!reviewed && people.length > 0 && (
+        <div style={{ margin: '12px 0' }}><Field label="Assigned to" hint={moved ? 'The task moves to this person and starts again for them. They are notified.' : 'Choose someone else to move this task.'}>
+          <select value={userId} onChange={(e) => setUserId(e.target.value)}>
+            {!people.some((p) => p._id === task.user?._id) && <option value={task.user?._id}>{task.user?.name}</option>}
+            {people.map((p) => <option key={p._id} value={p._id}>{p.name}{p.employeeId ? ` (${p.employeeId})` : ''}</option>)}
+          </select>
+        </Field></div>
+      )}
+      {moved ? null : task.update?.text ? <TaskUpdate update={task.update} /> : <div className="alert warn" style={{ marginTop: 10 }}>{task.user?.name?.split(' ')[0] || 'They'} has not added an update on this task yet.</div>}
+      {!moved && <><div style={{ marginTop: 12 }}><Field label="Your decision">
         <div className="row">
           <button type="button" className={`btn ${status === 'DONE' ? 'primary' : ''}`} onClick={() => setStatus('DONE')}>Approve (done)</button>
           <button type="button" className={`btn ${status === 'NOT_DONE' ? 'danger' : ''}`} onClick={() => setStatus('NOT_DONE')}>Not done</button>
@@ -67,13 +78,13 @@ function UpdateModal({ task, onClose }) {
         </div>
       </Field></div>
       {status === 'NOT_DONE' && <div className="alert warn" style={{ marginTop: 10 }}>This shows as a <b>late submission</b> and the task scores 0 for the day.</div>}
-      <div style={{ marginTop: 12 }}><Field label="Your note (optional)"><textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Shown to the employee" /></Field></div>
+      <div style={{ marginTop: 12 }}><Field label="Your note (optional)"><textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Shown to the employee" /></Field></div></>}
       {err && <div className="alert" style={{ marginTop: 10 }}>{err}</div>}
       <div className="row" style={{ marginTop: 14, justifyContent: 'space-between' }}>
         <button type="button" className="btn sm" onClick={() => save(true)} disabled={busy}>Delete task</button>
         <div className="row">
           <button type="button" className="btn" onClick={() => onClose(false)} disabled={busy}>Cancel</button>
-          <button type="button" className="btn primary" onClick={() => save()} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="btn primary" onClick={() => save()} disabled={busy}>{busy ? 'Saving…' : moved ? 'Move task' : 'Save'}</button>
         </div>
       </div>
     </Modal>
@@ -202,7 +213,7 @@ function TeamTasks({ me }) {
         );
       })}
       {modal?.kind === 'assign' && <AssignModal people={d.people} date={date >= d.today ? date : d.today} onClose={close} />}
-      {modal?.kind === 'update' && <UpdateModal task={modal.task} onClose={close} />}
+      {modal?.kind === 'update' && <UpdateModal task={modal.task} people={d.people || []} onClose={close} />}
       {me.role !== 'ADMIN' && <MyToday hideWhenEmpty />}
       {me.role !== 'ADMIN' && <TaskHistory userId={me._id} mine />}
     </>

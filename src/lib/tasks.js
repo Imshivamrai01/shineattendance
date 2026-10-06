@@ -43,11 +43,24 @@ export async function createTask(ctx, { userId, date, title, details }) {
   return task.toObject();
 }
 
-export async function updateTask(ctx, id, { status, note, title, details }) {
+export async function updateTask(ctx, id, { status, note, title, details, userId }) {
   const task = await M.Task.findById(id);
   if (!task) throw notFound('Task not found');
-  const subject = await managedSubject(ctx.user, task.user);
+  let subject = await managedSubject(ctx.user, task.user);
   const old = { status: task.status, late: task.late, note: task.note, title: task.title };
+  // Give the task to someone else: it starts again for them (no update, not reviewed).
+  if (userId !== undefined && String(userId) !== String(task.user)) {
+    if (['DONE', 'NOT_DONE'].includes(task.status)) throw bad('This task has already been reviewed and cannot be moved');
+    const from = subject;
+    subject = await managedSubject(ctx.user, userId);
+    task.user = subject._id; task.status = 'PENDING'; task.update = undefined; task.late = false; task.reviewedBy = undefined; task.reviewedAt = undefined;
+    await task.save();
+    await audit(ctx, { action: 'REASSIGNED_TASK', entityType: 'Task', entityId: task._id, subjectId: subject._id, department: subject.department,
+      oldData: { user: from.name }, newData: { user: subject.name, title: task.title, date: task.date } });
+    inApp(from._id, { title: 'Task moved to someone else', body: `${task.title} is now with ${subject.name}. You no longer need to update it.`, link: '/tasks' });
+    notifyTaskAssigned(task._id);
+    old.status = task.status; // the status notice below is only for a decision made in this same save
+  }
   if (status !== undefined) {
     if (!STATUSES.includes(status)) throw bad('Invalid status');
     const today = dateKey();

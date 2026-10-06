@@ -346,8 +346,19 @@ try {
   const done = ok(await hrC.call('PATCH', `/api/tasks/${tk1._id}`, { status: 'DONE', note: 'All 20 called' })).task;
   assert.equal(done.late, false); assert.equal(done.status, 'DONE');
   assert.equal((await pe.call('POST', `/api/tasks/${tk1._id}/update`, { text: 'Changing my update', done: false })).status, 400); t('HR approves the update the same day (scores 1); it is then locked');
+  // Move a task to another person: it starts again for them, both are told; a reviewed task cannot be moved
+  const other = ok(await admin.call('POST', '/api/users', { role: 'EMPLOYEE', employeeId: 'E-501', name: 'Karan Mehta', department: dept._id, hr: hr.user._id }));
+  const tk3 = ok(await hrC.call('POST', '/api/tasks', { userId: pv.user._id, title: 'Prepare the client list' })).task;
+  ok(await pe.call('POST', `/api/tasks/${tk3._id}/update`, { text: 'Half done', done: false }));
+  const movedTask = ok(await hrC.call('PATCH', `/api/tasks/${tk3._id}`, { userId: other.user._id })).task;
+  assert.equal(String(movedTask.user), String(other.user._id)); assert.equal(movedTask.status, 'PENDING'); assert.equal(movedTask.update, undefined);
+  assert.equal(ok(await pe.call('GET', '/api/tasks?mine=1')).tasks.some((x) => x._id === tk3._id), false);
+  assert.equal((await hrC.call('PATCH', `/api/tasks/${tk1._id}`, { userId: other.user._id })).status, 400);
+  assert.equal((await hrC.call('PATCH', `/api/tasks/${tk3._id}`, { userId: String(coo.user._id) })).status, 403);
+  await wait(600);
+  assert.ok(ok(await pe.call('GET', '/api/notifications')).items.some((n) => /Task moved to someone else/.test(n.title))); t('a task can be moved to another person');
   const team = ok(await hrC.call('GET', '/api/tasks'));
-  assert.ok(team.people.some((p) => p._id === pv.user._id)); assert.equal(team.tasks.length, 2); t('HR sees the team tasks and assignable people');
+  assert.ok(team.people.some((p) => p._id === pv.user._id)); assert.equal(team.tasks.length, 3); t('HR sees the team tasks and assignable people');
 
   // CRM (WhatsApp): Admin + COO only; nothing can be sent until it is connected
   assert.equal((await hrC.call('GET', '/api/crm')).status, 403); assert.equal((await pe.call('GET', '/api/crm')).status, 403);
@@ -393,7 +404,7 @@ try {
   assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.checkedIn, false);
   assert.equal((await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Late work' })).status, 403); t('after office hours: everyone checked out, check-in closed');
   const rep = ok(await cronCall('/api/cron/daily-report'));
-  assert.equal(rep.tasks.finalized, 1); assert.ok(rep.report.present >= 1);
+  assert.equal(rep.tasks.finalized, 2); assert.ok(rep.report.present >= 1);
   const late = ok(await pe.call('GET', '/api/tasks?mine=1')).tasks.find((x) => x._id === tk2._id);
   assert.equal(late.status, 'NOT_DONE'); assert.equal(late.label, 'Late submission'); assert.equal(late.score, 0); t('un-updated task becomes a late submission (score 0)');
   await wait(2000);
