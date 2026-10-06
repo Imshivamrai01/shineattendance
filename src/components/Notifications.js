@@ -3,7 +3,49 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/client';
 import Icon from '@/components/Icon';
-import { Modal } from '@/components/ui';
+import { Field, Modal } from '@/components/ui';
+
+const SENDERS = ['ADMIN', 'COO', 'MANAGER', 'HR'];
+
+function Compose({ onDone, onCancel }) {
+  const [people, setPeople] = useState(null);
+  const [everyone, setEveryone] = useState(true);
+  const [picked, setPicked] = useState({});
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => { api('/users?limit=500&status=ACTIVE').then((d) => setPeople(d.items)).catch((e) => setErr(e.message)); }, []);
+  const ids = Object.keys(picked).filter((k) => picked[k]);
+  const send = async (e) => {
+    e.preventDefault(); setBusy(true); setErr('');
+    try {
+      const r = await api('/notifications', { method: 'PUT', body: { title, body, to: everyone ? 'all' : ids } });
+      onDone(`Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`);
+    } catch (x) { setErr(x.message); setBusy(false); }
+  };
+  return (
+    <form onSubmit={send}>
+      <Field label="To">
+        <label className="check"><input type="checkbox" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} /> Everyone I oversee{people ? ` (${people.length})` : ''}</label>
+        {!everyone && (
+          <div className="pick-list">
+            {!people ? <span className="muted small">Loading…</span> : people.map((p) => (
+              <label key={p._id} className="check"><input type="checkbox" checked={!!picked[p._id]} onChange={(e) => setPicked({ ...picked, [p._id]: e.target.checked })} />
+                <span>{p.name} <span className="muted small">{p.employeeId} · {p.role}</span></span></label>))}
+          </div>
+        )}
+      </Field>
+      <div style={{ marginTop: 10 }}><Field label="Title"><input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} required minLength={3} placeholder="e.g. Office closed on Monday" /></Field></div>
+      <div style={{ marginTop: 10 }}><Field label="Message"><textarea rows={4} value={body} onChange={(e) => setBody(e.target.value)} maxLength={450} required minLength={3} /></Field></div>
+      {err && <div className="alert" style={{ marginTop: 10 }}>{err}</div>}
+      <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
+        <button type="button" className="btn" onClick={onCancel} disabled={busy}>Back</button>
+        <button className="btn primary" disabled={busy || (!everyone && !ids.length)}>{busy ? 'Sending…' : 'Send'}</button>
+      </div>
+    </form>
+  );
+}
 
 const POLL_MS = 90000;
 const ago = (d) => {
@@ -15,10 +57,13 @@ const ago = (d) => {
 };
 
 /** The bell: shows unread notifications; reading one (or all) clears it from the list. */
-export default function Notifications() {
+export default function Notifications({ role }) {
   const router = useRouter();
   const [data, setData] = useState({ items: [], count: 0 });
   const [open, setOpen] = useState(false);
+  const [compose, setCompose] = useState(false);
+  const [sentNote, setSentNote] = useState('');
+  const canSend = SENDERS.includes(role);
   const load = useCallback(() => api('/notifications').then(setData).catch(() => {}), []);
 
   useEffect(() => {
@@ -41,12 +86,14 @@ export default function Notifications() {
 
   return (
     <>
-      <button type="button" className="bell" onClick={() => { setOpen(true); load(); }} aria-label={`Notifications${data.count ? `, ${data.count} unread` : ''}`}>
+      <button type="button" className="bell" onClick={() => { setOpen(true); setCompose(false); setSentNote(''); load(); }} aria-label={`Notifications${data.count ? `, ${data.count} unread` : ''}`}>
         <Icon name="bell" size={20} />
         {data.count > 0 && <span className="bell-count">{data.count > 9 ? '9+' : data.count}</span>}
       </button>
       {open && (
-        <Modal title="Notifications" onClose={() => setOpen(false)}>
+        <Modal title={compose ? 'Send a notification' : 'Notifications'} onClose={() => setOpen(false)}>
+          {compose ? <Compose onCancel={() => setCompose(false)} onDone={(m) => { setCompose(false); setSentNote(m); }} /> : <>
+          {sentNote && <div className="alert ok">{sentNote}</div>}
           {data.items.length === 0 ? <p className="muted" style={{ textAlign: 'center', padding: '18px 0' }}>You&apos;re all caught up.</p> : (
             <div className="notes">
               {data.items.map((n) => (
@@ -62,9 +109,11 @@ export default function Notifications() {
             </div>
           )}
           <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
+            {canSend && <button type="button" className="btn" style={{ marginRight: 'auto' }} onClick={() => setCompose(true)}>+ Send notification</button>}
             {data.items.length > 0 && <button type="button" className="btn" onClick={readAll}>Mark all as read</button>}
             <button type="button" className="btn primary" onClick={() => setOpen(false)}>Close</button>
           </div>
+          </>}
         </Modal>
       )}
     </>

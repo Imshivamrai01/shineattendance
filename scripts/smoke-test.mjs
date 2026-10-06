@@ -291,6 +291,15 @@ try {
   ok(await pe.call('POST', '/api/notifications', { all: true }));
   assert.equal(ok(await pe.call('GET', '/api/notifications')).count, 0);
   assert.equal(ok(await hrC.call('GET', '/api/notifications')).items.some((n) => /New task assigned/.test(n.title)), false); t('notification bell: welcome + task for the employee only; read clears');
+  // Custom notifications: Admin / COO / Manager / HR to the people they oversee
+  assert.equal((await pe.call('PUT', '/api/notifications', { title: 'Hello all', body: 'From an employee', to: 'all' })).status, 403);
+  assert.equal((await hrC.call('PUT', '/api/notifications', { title: 'Hi', body: 'x', to: 'all' })).status, 400);
+  assert.equal((await hrC.call('PUT', '/api/notifications', { title: 'Not mine', body: 'Should not arrive', to: [String(coo.user._id)] })).status, 400);
+  assert.equal(ok(await hrC.call('PUT', '/api/notifications', { title: 'Office closed Monday', body: 'Diwali holiday.', to: [String(pv.user._id)] })).sent, 1);
+  assert.ok(ok(await admin.call('PUT', '/api/notifications', { title: 'Town hall at 4 PM', body: 'Everyone please join.', to: 'all' })).sent >= 3);
+  await wait(800);
+  const custom = ok(await pe.call('GET', '/api/notifications')).items;
+  assert.ok(custom.some((n) => n.title === 'Office closed Monday' && /Hina HR \(HR\)/.test(n.body)) && custom.some((n) => n.title === 'Town hall at 4 PM')); t('custom notifications: staff roles only, only to people they oversee');
   // A person added today has no attendance history before today ("no data", not "absent")
   const h0 = ok(await pe.call('GET', `/api/users/${pv.user._id}/attendance`));
   assert.equal(h0.months.length, 1); assert.equal(h0.start, h0.today); assert.ok(h0.days.filter((x) => x.date < h0.today).every((x) => x.status === 'BEFORE_START')); t('history starts on the onboarding day');
@@ -350,6 +359,7 @@ try {
   const report = mailsTo('report@test.local').find((m) => /Attendance report/.test(m.subject));
   assert.ok(report && report.html.includes('Priya Verma') && report.html.includes('Call 20 leads') && report.html.includes('Late submission'), 'detailed report');
   assert.ok(has('priya@example.com', /office closing/), 'end-of-day check-out mail');
+  assert.ok(mailsTo('priya@example.com').some((m) => /^New task for .*Call 20 leads/.test(m.subject) && m.text.includes('Gorakhpur list')), 'task assignment email');
   assert.equal(outbox.filter((m) => /Attendance report|Attendance summary|Absent so far/.test(m.subject) && !m.to.includes('report@test.local')).length, 0, 'report goes nowhere else');
   t('evening report (attendance + tasks) goes only to the report address');
 

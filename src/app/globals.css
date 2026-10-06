@@ -419,3 +419,4 @@ button.att-name { color: var(--brand); cursor: pointer; }
 .check input { width: 18px; height: 18px; min-height: 0; padding: 0; flex: none; margin: 2px 0 0; }
 .check.off { opacity: .55; cursor: default; }
 .pick-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; margin-top: 6px; }
+.note-body { white-space: pre-line; }

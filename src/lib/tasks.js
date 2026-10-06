@@ -5,7 +5,7 @@ import { dateKey } from './dates.js';
 import { canManage, scopeFilter } from './users.js';
 import { queueTaskSync, queueTaskRemoved, populateTask } from './sheetSync.js';
 import { taskScore, taskLabel } from './taskScore.js';
-import { note as inApp } from './notify.js';
+import { note as inApp, notifyTaskAssigned } from './notify.js';
 
 // Daily tasks: HR (or Manager / COO / Admin) assigns work for a day and marks it done or not done in the evening.
 export const ASSIGNER_ROLES = ['ADMIN', 'COO', 'MANAGER', 'HR'];
@@ -39,7 +39,7 @@ export async function createTask(ctx, { userId, date, title, details }) {
   await audit(ctx, { action: 'ASSIGNED_TASK', entityType: 'Task', entityId: task._id, subjectId: subject._id, department: subject.department,
     newData: { date: day, title: t } });
   queueTaskSync(task._id);
-  inApp(subject._id, { title: 'New task assigned', body: `${t} (for ${day}), from ${ctx.user.name}.`, link: '/tasks' });
+  notifyTaskAssigned(task._id);
   return task.toObject();
 }
 

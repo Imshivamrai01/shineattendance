@@ -273,6 +273,30 @@ export function notifyProfileChanged({ userId, actor, fields, reason }) {
   });
 }
 
+/** A task was assigned: tell the assignee in the app and by email. */
+export function notifyTaskAssigned(taskId) {
+  defer(async () => {
+    const t = await M.Task.findById(taskId).populate('assignedBy', 'name role').lean();
+    if (t) note(t.user, { title: 'New task assigned', body: `${t.title} (for ${dayLabel(t.date)}), from ${t.assignedBy?.name || 'your HR'}.`, link: '/tasks' });
+  });
+  queue('task assigned', async () => {
+    const t = await M.Task.findById(taskId).populate('user', 'name email').populate('assignedBy', 'name role').lean();
+    if (!t?.user?.email) return;
+    const by = t.assignedBy ? `${t.assignedBy.name} (${ROLE[t.assignedBy.role] || t.assignedBy.role})` : 'HR';
+    await sendMail({
+      to: t.user.email, subject: `New task for ${dayLabel(t.date)}: ${t.title.slice(0, 60)}`,
+      ...layout({ tone: 'info', title: 'New task assigned', greeting: `Hi ${nameOf(t.user)},`, intro: `${by} assigned you a task for ${dayLabel(t.date)}.`,
+        highlight: t.title, rows: [...(t.details ? [['Details', t.details]] : []), ['Due', dayLabel(t.date)], ['Assigned by', by]],
+        notes: ['Your work status is updated in the evening. A task that is not done shows as a late submission and scores 0 for the day.'], link: link('/tasks'), linkText: 'Open my tasks' }),
+    });
+  });
+}
+
+/** A message written by Admin / COO / Manager / HR, shown in the bell of the people they picked. */
+export function notifyCustom({ to, title, body, sender }) {
+  note(to, { title, body: `${body}\n— ${sender.name} (${ROLE[sender.role] || sender.role})`, link: '/' });
+}
+
 // ---------- 4. Security ----------
 export function notifyLockout({ userId, ip }) {
   defer(async () => {

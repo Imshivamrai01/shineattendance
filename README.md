@@ -79,6 +79,6 @@ npx wrangler tail                  # live logs
 ## Daily tasks, emails and location
 
 - **Tasks** (`/tasks`): HR (and Manager / COO / Admin) assign tasks for a day and mark them Done / Not done in the evening. Not done, never updated by 8 PM, or done on a later day = **Late submission**, score 0. Employees see their tasks and 30-day work status (also on their profile). Synced to the **Tasks** tab of the Google Sheet (no script change needed).
-- **Emails**: employees get only welcome / password and check-in / check-out mails (including auto check-outs). Approvers still get "approval needed"; Admin + COO get changes and alerts. The detailed attendance + task report goes only to `REPORT_EMAIL`.
+- **Emails**: employees get only welcome / password, check-in / check-out (including auto check-outs) and task-assigned mails. Approvers still get "approval needed"; Admin + COO get changes and alerts. The detailed attendance + task report goes only to `REPORT_EMAIL`.
 - **Location**: every page of the app (`LocationGuard`) re-checks position when it is opened or brought to the front and every 30 s while visible; far away (> 100 m with good GPS) = checked out at once. Browsers pause closed web apps, so nothing runs while the app is fully closed; the 6 PM check-out is the backstop.
 - **Profile photo**: people upload their own (Admin can change anyone's); stored privately in Cloudinary like attendance photos.

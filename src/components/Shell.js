@@ -91,11 +91,11 @@ export default function Shell({ children }) {
     <Ctx.Provider value={me}>
       <div className="top">
         <div className="brand" style={{ padding: 0 }}><Logo size={32} /> Shine Attendance</div>
-        <span className="top-right"><span className="top-user">{me.name.split(' ')[0]}</span>{phone && <Notifications />}</span>
+        <span className="top-right"><span className="top-user">{me.name.split(' ')[0]}</span>{phone && <Notifications role={me.role} />}</span>
       </div>
       <div className="shell">
         <aside className={`side ${open ? 'open' : ''}`}>
-          <div className="brand"><Logo size={32} /> Shine Attendance{!phone && <span className="side-bell"><Notifications /></span>}</div>
+          <div className="brand"><Logo size={32} /> Shine Attendance{!phone && <span className="side-bell"><Notifications role={me.role} /></span>}</div>
           <nav>
             {items.map((n) => (
               <Link key={n.href} href={n.href} className={`nav ${active === n.href ? 'on' : ''}`}><Icon name={n.icon} /> {n.label}</Link>
