@@ -420,3 +420,18 @@ button.att-name { color: var(--brand); cursor: pointer; }
 .check.off { opacity: .55; cursor: default; }
 .pick-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; margin-top: 6px; }
 .note-body { white-space: pre-line; }
+
+/* Privacy policy (public page) */
+.policy { max-width: 780px; margin: 0 auto; padding: 32px 16px 48px; }
+.policy-head { text-align: center; margin-bottom: 20px; }
+.policy-head h1 { margin: 12px 0 4px; font-size: 28px; }
+.policy-head p { margin: 2px 0; }
+.policy-body { line-height: 1.7; padding: 26px; }
+.policy-body p { margin: 0 0 12px; }
+.policy-body ul { margin: 0 0 12px; padding-left: 20px; }
+.policy-body li { margin: 6px 0; }
+.policy-section { margin-top: 22px; }
+.policy-section h2 { font-size: 17px; margin: 0 0 8px; }
+.policy-foot { text-align: center; margin-top: 18px; }
+.login-links { text-align: center; margin: 14px 0 0; font-size: 13px; }
+@media (max-width: 800px) { .policy { padding: 20px 14px 36px; } .policy-body { padding: 18px 16px; } .policy-head h1 { font-size: 23px; } }

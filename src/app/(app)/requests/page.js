@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useLive } from '@/lib/useLive';
 import { api, fmtDateTime } from '@/lib/client';
 import { useMe } from '@/components/Shell';
 import { Badge, ConfirmModal, Empty, statusTone, Skeleton } from '@/components/ui';
@@ -18,8 +19,8 @@ export default function Requests() {
   const [modal, setModal] = useState(null);
   // Deciding a stage that belongs to a lower role is allowed (Admin > COO > Manager > HR) but is an override.
   const ownStage = (r) => r.status === OWN_STAGE[me.role] || (r.status === 'PENDING_MANAGER' && String(r.subject?.manager) === String(me._id));
-  const load = useCallback(() => api(`/requests${filter === 'pending' ? '?pending=1' : ''}`).then((d) => setItems(d.items)).catch((e) => setErr(e.message)), [filter]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => api(`/requests${filter === 'pending' ? '?pending=1' : ''}`).then((d) => { setItems(d.items); setErr(''); }).catch((e) => setErr(e.message)), [filter]);
+  useLive(load, 20000);
 
   return (
     <>

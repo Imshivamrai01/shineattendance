@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useLive } from '@/lib/useLive';
 import { api, fmtTime, fmtDateTime } from '@/lib/client';
 import { useMe } from '@/components/Shell';
 import { Badge, Skeleton } from '@/components/ui';
@@ -76,6 +77,7 @@ function AttendanceCard({ data, reload }) {
     const onPing = (e) => {
       const r = e.detail || {};
       setAway(!!r.warning);
+      if (typeof r.open === 'boolean' && r.open !== t.checkedIn && !r.autoCheckedOut) reload();
       if (r.autoCheckedOut) {
         setMsg({ text: r.endOfDay ? 'Office hours are over, so you were checked out automatically.' : `You moved away from the office (${r.distance} m) so you were checked out automatically.` });
         reload();
@@ -83,7 +85,7 @@ function AttendanceCard({ data, reload }) {
     };
     window.addEventListener('attendance:ping', onPing);
     return () => window.removeEventListener('attendance:ping', onPing);
-  }, [reload]);
+  }, [reload, t.checkedIn]);
   return (
     <div className="card">
       {cam && <CameraCapture title={cam.kind === 'check-in' ? 'Photo for check-in' : 'Photo for check-out'} onDone={closeCam} onCancel={() => closeCam(null)} />}
@@ -127,7 +129,8 @@ function AttendanceCard({ data, reload }) {
 
 function TodayTasks() {
   const [d, setD] = useState(null);
-  useEffect(() => { api('/tasks?mine=1').then(setD).catch(() => {}); }, []);
+  const load = useCallback(() => api('/tasks?mine=1').then(setD).catch(() => {}), []);
+  useLive(load, 30000);
   if (!d || !d.tasks.length) return null;
   const score = d.tasks.reduce((a, t) => a + t.score, 0);
   return (
@@ -329,9 +332,9 @@ export default function Dashboard() {
   const me = useMe();
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
-  const load = useCallback(() => api('/dashboard').then(setD).catch((e) => setErr(e.message)), []);
-  useEffect(() => { load(); }, [load]);
-  if (err) return <div className="alert">{err}</div>;
+  const load = useCallback(() => api('/dashboard').then((x) => { setD(x); setErr(''); }).catch((e) => setErr(e.message)), []);
+  useLive(load, 15000);
+  if (err && !d) return <div className="alert">{err}</div>;
   if (!d) return <Skeleton />;
   const isAdmin = me.role === 'ADMIN';
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });

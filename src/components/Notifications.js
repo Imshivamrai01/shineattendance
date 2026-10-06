@@ -47,7 +47,7 @@ function Compose({ onDone, onCancel }) {
   );
 }
 
-const POLL_MS = 90000;
+const POLL_MS = 30000;
 const ago = (d) => {
   const m = Math.floor((Date.now() - new Date(d)) / 60000);
   if (m < 1) return 'just now';

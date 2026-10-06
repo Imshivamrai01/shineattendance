@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useLive } from '@/lib/useLive';
 import { api, fmtTime, toLocalInput } from '@/lib/client';
 import { minutesText } from '@/lib/hours';
 import { useMe } from '@/components/Shell';
@@ -58,8 +59,8 @@ export default function Attendance() {
   const [people, setPeople] = useState([]);
   useEffect(() => { if (me.role !== 'EMPLOYEE') api('/users?limit=500').then((d) => setPeople(d.items)).catch(() => {}); }, [me.role]);
   const qs = `from=${from}&to=${to}${role ? `&role=${role}` : ''}${person ? `&userId=${person}` : ''}`;
-  const load = useCallback(() => api(`/attendance?${qs}`).then((d) => setItems(d.items)).catch((e) => setErr(e.message)), [qs]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => api(`/attendance?${qs}`).then((d) => { setItems(d.items); setErr(''); }).catch((e) => setErr(e.message)), [qs]);
+  useLive(load, 20000);
   const done = (m) => { setModal(null); if (m) setNote(m); load(); };
   const staff = me.role !== 'EMPLOYEE';
   // Tapping a name shows that person's attendance for this month.

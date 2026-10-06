@@ -1,6 +1,7 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '@/lib/client';
+import { useLive } from '@/lib/useLive';
 import { useMe } from '@/components/Shell';
 import { Badge, Empty, Field, Modal, Skeleton } from '@/components/ui';
 import Avatar from '@/components/Avatar';
@@ -95,9 +96,9 @@ function TeamTasks({ me }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [modal, setModal] = useState(null);
-  const load = useCallback(() => api(`/tasks${date ? `?date=${date}` : ''}`).then((x) => { setD(x); if (!date) setDate(x.today); }).catch((e) => setErr(e.message)), [date]);
-  useEffect(() => { load(); }, [load]);
-  if (err) return <div className="alert">{err}</div>;
+  const load = useCallback(() => api(`/tasks${date ? `?date=${date}` : ''}`).then((x) => { setD(x); setErr(''); if (!date) setDate(x.today); }).catch((e) => setErr(e.message)), [date]);
+  useLive(load, 20000);
+  if (err && !d) return <div className="alert">{err}</div>;
   if (!d) return <Skeleton />;
 
   const byPerson = {};
@@ -146,8 +147,9 @@ function TeamTasks({ me }) {
 function MyTasks({ me }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
-  useEffect(() => { api('/tasks?mine=1').then(setD).catch((e) => setErr(e.message)); }, []);
-  if (err) return <div className="alert">{err}</div>;
+  const load = useCallback(() => api('/tasks?mine=1').then((x) => { setD(x); setErr(''); }).catch((e) => setErr(e.message)), []);
+  useLive(load, 20000);
+  if (err && !d) return <div className="alert">{err}</div>;
   if (!d) return <Skeleton />;
   const score = d.tasks.reduce((a, t) => a + t.score, 0);
   return (

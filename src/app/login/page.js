@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/client';
 import { Field } from '@/components/ui';
 import Logo from '@/components/Logo';
@@ -28,6 +29,7 @@ export default function Login() {
           <Field label="User ID" hint="Your Employee ID, email or mobile number"><input value={identifier} onChange={(e) => setId(e.target.value)} autoComplete="username" required autoFocus /></Field>
           <Field label="Password"><input type="password" value={password} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required /></Field>
           <button className="btn primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          <p className="login-links muted"><Link href="/privacy">Privacy Policy</Link></p>
         </div>
       </form>
     </div>
