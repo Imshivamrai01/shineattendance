@@ -1,6 +1,7 @@
 import { M, getSettings, defer } from './db.js';
 import { sendMail, layout, appUrl, mailConfigured, esc } from './mailer.js';
 import { taskLabel, taskPoints, taskScore } from './taskScore.js';
+import { checkText, sessionCodes } from './presence.js';
 import { dateKey } from './dates.js';
 import { awayMs, dayFlags, hoursCfg, label12, minutesText, workedHours } from './hours.js';
 
@@ -170,6 +171,46 @@ export function notifyCheckout({ userId, recId, at, auto = false, endOfDay = fal
   });
 }
 
+// ---------- Presence: "Still in office?" ----------
+const BATTERY_TIPS = ['Open Shine Attendance and tap "Yes, I am in the office".', 'To stop this happening: Settings > Apps > Shine Attendance > Battery: allow background activity / do not optimise; turn on Auto launch; set Location to "Allow all the time".'];
+
+/** The location signal was lost or shows the person outside: ask them. Bell + email (the app may be closed). */
+export function notifyPresenceAsked({ userId, reason, since, distance }) {
+  const exit = reason === 'GEOFENCE_EXIT';
+  note(userId, { title: 'Still in office?', link: '/',
+    body: exit ? `Your location showed ${distance} m from the office at ${fmtTime(since)}. Open the app and confirm.` : `We have not received your location since ${fmtTime(since)}. Open the app and confirm you are in the office.` });
+  queue('still in office', async () => {
+    const u = await M.User.findById(userId).select('name email').lean();
+    if (!u?.email) return;
+    await sendMail({
+      to: u.email, subject: 'Still in office? Please confirm in Shine Attendance',
+      ...layout({ tone: 'warn', title: 'Still in office?', greeting: `Hi ${nameOf(u)},`,
+        intro: exit ? `Your phone's location showed you about ${distance} m from the office at ${fmtTime(since)}.` : `We stopped receiving your phone's location at ${fmtTime(since)}.`,
+        notes: ['You are still checked in. Nothing has been changed.', 'Please open the app and confirm within 15 minutes; otherwise your HR / Manager will review it.', ...(exit ? [] : BATTERY_TIPS.slice(1))],
+        link: link('/'), linkText: 'Open Shine Attendance' }),
+    });
+  });
+}
+
+/** No reply (or the answer needs a decision): tell the people who can review this person. */
+export function notifyReviewRequired({ userId, recId, reason, since, answer }) {
+  defer(async () => {
+    const u = await M.User.findById(userId).select('name hr manager').lean();
+    if (!u) return;
+    const to = [u.hr, u.manager, ...(await idsOf({ role: { $in: ['ADMIN', 'COO'] } }))].filter((id) => id && String(id) !== String(userId));
+    const what = reason === 'GEOFENCE_EXIT' ? `location showed them outside the office at ${fmtTime(since)}` : `no location from their phone since ${fmtTime(since)}`;
+    const said = answer === 'LEFT' ? 'They say they have left.' : answer === 'IN_OFFICE' ? 'They say they are in the office, but the location disagrees.' : 'They did not reply.';
+    note(to, { title: `Attendance review needed: ${u.name}`, body: `${u.name}: ${what}. ${said} They are still checked in until you decide.`, link: '/attendance?review=1' });
+  });
+}
+
+/** The reviewer's decision, to the employee. */
+export function notifyPresenceReviewed({ userId, decision, at, by, note: text }) {
+  note(userId, decision === 'LEFT'
+    ? { title: `You were checked out at ${fmtTime(at)}`, body: `${by.name} reviewed your attendance and set your check-out to ${fmtTime(at)}. Note: ${text}`, link: '/attendance' }
+    : { title: 'Attendance reviewed: no change', body: `${by.name} confirmed you were in the office. Note: ${text}`, link: '/attendance' });
+}
+
 /** Someone came back after leaving the premises and gave a reason (to Admin + COO). */
 export function notifyReentry({ userId, reason, at }) {
   defer(async () => {
@@ -323,7 +364,7 @@ export function notifyLockout({ userId, ip }) {
 // ---------- 5. Scheduled: evening report (only to the report address) ----------
 const TD = 'padding:8px 10px;border-top:1px solid #e6e9f1;vertical-align:top;font-size:13px';
 const TH = 'padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7489;background:#fafbfe';
-const sessionText = (s) => `${fmtTime(s.checkIn)} – ${s.checkOut ? fmtTime(s.checkOut) : 'still in'}${s.silent ? ' (location stopped)' : s.autoCheckout ? ' (left office)' : s.endOfDay ? ' (office closed)' : ''}${s.corrected ? ' (corrected)' : ''}`;
+const sessionText = (s) => `${fmtTime(s.checkIn)} – ${s.checkOut ? fmtTime(s.checkOut) : 'still in'} [${sessionCodes(s).map((k) => k.label).join(', ') || 'open'}]`;
 
 /** Detailed day report: who came, when they came and left, hours, flags and task status. */
 export async function sendDailyReport(date = dateKey()) {
@@ -356,6 +397,7 @@ export async function sendDailyReport(date = dateKey()) {
       f.late && `Late ${minutesText(f.lateMinutes)}`, f.early && `Left ${minutesText(f.earlyMinutes)} early`,
       r.sessions.some((s) => s.inGeo?.verified === false) && 'Check-in outside office',
       ...r.sessions.filter((s) => s.lateReason).map((s) => `Late reason: ${s.lateReason}`),
+      ...r.sessions.flatMap((s) => (s.checks || []).map(checkText)),
       ...r.sessions.filter((s) => s.reentryReason).map((s) => `Came back ${fmtTime(s.checkIn)}: ${s.reentryReason}`),
       ...r.sessions.flatMap((s) => (s.breaks || []).map((b) => `Away ${fmtTime(b.outAt)} to ${fmtTime(b.backAt)} (${minutesText(Math.round(awayMs(b, r.date, cfg) / 60000))} deducted): ${b.reason}`)),
     ].filter(Boolean);

@@ -8,6 +8,7 @@ import Logo from '@/components/Logo';
 import LocationGuard from '@/components/LocationGuard';
 import Avatar from '@/components/Avatar';
 import Notifications from '@/components/Notifications';
+import PresencePrompt from '@/components/PresencePrompt';
 
 const Ctx = createContext(null);
 export const useMe = () => useContext(Ctx);
@@ -113,6 +114,7 @@ export default function Shell({ children }) {
         <main className="main fade">{children}</main>
       </div>
       {me.role !== 'ADMIN' && <LocationGuard />}
+      {me.role !== 'ADMIN' && <PresencePrompt />}
       {open && <div className="scrim" onClick={() => setOpen(false)} />}
       <nav className="bottom" aria-label="Main">
         {bottom.map((n) => (

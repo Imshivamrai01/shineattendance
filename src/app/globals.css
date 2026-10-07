@@ -440,3 +440,7 @@ button.att-name { color: var(--brand); cursor: pointer; }
 .points { margin: 4px 0 2px; padding-left: 18px; font-size: 13.5px; color: var(--muted); }
 .points li { margin: 2px 0; overflow-wrap: anywhere; }
 .task-update { margin: 8px 0 4px; padding: 8px 10px; border-left: 3px solid var(--brand); background: var(--brand-soft); border-radius: 0 10px 10px 0; font-size: 14px; overflow-wrap: anywhere; }
+
+/* Attendance: reason codes and review */
+.att-check { display: block; flex-basis: 100%; }
+.att-session-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }

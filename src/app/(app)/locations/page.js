@@ -29,7 +29,7 @@ function LocModal({ loc, onClose, onDone }) {
           <Field label="Latitude"><input value={f.latitude} onChange={set('latitude')} required inputMode="decimal" /></Field>
           <Field label="Longitude"><input value={f.longitude} onChange={set('longitude')} required inputMode="decimal" /></Field>
           <Field label="Check-in radius (m)" hint="Must be this close to check in. Blank = default"><input value={f.radiusMeters} onChange={set('radiusMeters')} inputMode="numeric" /></Field>
-          <Field label="Auto check-out beyond (m)" hint="Blank = 20"><input value={f.checkoutRadiusMeters} onChange={set('checkoutRadiusMeters')} inputMode="numeric" /></Field>
+          <Field label="Ask &quot;Still in office?&quot; beyond (m)" hint="Blank = 100. Nobody is checked out automatically."><input value={f.checkoutRadiusMeters} onChange={set('checkoutRadiusMeters')} inputMode="numeric" /></Field>
           <div style={{ alignSelf: 'end' }}><button type="button" className="btn" onClick={useHere}>Use my current position</button></div>
           {loc && <Field label="Status"><select value={f.status} onChange={set('status')}><option>ACTIVE</option><option>INACTIVE</option></select></Field>}
           {loc && <Field label="Reason for change (required)" span><input value={f.reason} onChange={set('reason')} /></Field>}

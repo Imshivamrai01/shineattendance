@@ -11,7 +11,22 @@ const session = new Schema({
   corrected: { type: Boolean, default: false },
   autoCheckout: { type: Boolean, default: false },
   endOfDay: { type: Boolean, default: false }, // closed automatically at office closing time
-  silent: { type: Boolean, default: false }, // closed because the phone stopped reporting its location (check-out = last report)
+  silent: { type: Boolean, default: false }, // (old rule) closed because the phone stopped reporting its location
+  // Location signal, kept apart from open/closed: it never closes a session by itself (see lib/presence.js).
+  signal: { type: String, enum: ['INSIDE', 'OUTSIDE', 'UNKNOWN'] }, signalAt: Date,
+  // How the session was closed: MANUAL (the person), OFFICE_CLOSED, REVIEW (an authorised reviewer).
+  closeReason: String,
+  // "Still in office?" checks raised when the signal was lost or showed the person outside.
+  checks: [new Schema({
+    reason: { type: String, enum: ['SIGNAL_LOST', 'GEOFENCE_EXIT'], required: true },
+    since: Date, distance: Number, accuracy: Number, // when the signal changed (last report / first outside fix)
+    askedAt: Date,
+    status: { type: String, enum: ['ASKED', 'REVIEW_REQUIRED', 'RESOLVED'], default: 'ASKED' },
+    answer: { type: String, enum: ['IN_OFFICE', 'LEFT'] }, answeredAt: Date, answerDistance: Number,
+    outcome: { type: String, enum: ['EMPLOYEE_CONFIRMED', 'SIGNAL_RESTORED', 'MANUAL_CHECKOUT', 'REVIEW_STAYED', 'REVIEW_LEFT', 'OFFICE_CLOSED'] },
+    resolvedAt: Date, leftAt: Date, note: String,
+    reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' }, reviewedByName: String,
+  })],
   reentryReason: String, // (older records) why the user came back after leaving the premises
   lastPingAt: Date, lastPingDistance: Number, // most recent location report while checked in (shows when a phone stops reporting)
   lateReason: String, // why the first check-in of the day was after office start

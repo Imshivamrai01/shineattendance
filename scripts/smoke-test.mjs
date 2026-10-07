@@ -8,6 +8,7 @@ import { simpleParser } from 'mailparser';
 import { awayMs, dayFlags, label12, workedHours } from '../src/lib/hours.js';
 import { normalizePhone } from '../src/lib/whatsapp.js';
 import { startWaMock } from './wa-mock.mjs';
+import { sessionCodes } from '../src/lib/presence.js';
 import { taskPoints } from '../src/lib/taskScore.js';
 
 // A local SMTP server that records every email the app sends, so recipients and content can be checked.
@@ -23,7 +24,7 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', OUT_SECONDS_TO_CHECKOUT: '0', SILENT_MINUTES_TO_CHECKOUT: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', PRESENCE_OUT_SECONDS: '0', PRESENCE_SILENT_MINUTES: '0', PRESENCE_REPLY_MINUTES: '0', PRESENCE_COOLDOWN_MINUTES: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
 const wa = startWaMock(3999);
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
@@ -109,42 +110,61 @@ try {
   assert.equal((await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733 })).status, 409); t('double check-in blocked');
   ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 })); t('check-out');
 
-  // Weak GPS rejected; leaving the checkout radius auto checks out after 2 consecutive pings
+  // Weak GPS is rejected at check-in
   const weak = await e.call('POST', '/api/attendance/check-in', { lat: 28.6, lng: 77.2, accuracy: 120 });
   assert.equal(weak.status, 403); assert.match(weak.data.error, /not in the office/); t('outside + weak GPS => "not in the office"');
   ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 }));
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true);
-  // ~67 m away: beyond the 20 m checkout radius but not clearly gone => warnings first, check-out on the 3rd report
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
-  // a far-away reading that is not a precise GPS fix (cell tower / Wi-Fi) is never enough on its own
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).open, true); // back inside: counter resets
-  for (let i = 0; i < 4; i++) assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7650, lng: 83.3732, accuracy: 40 })).uncertain, true); // 490 m "away", rough fix: ignored however often
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7650, lng: 83.3732, accuracy: 40 })).uncertain, true); // a rough fix in between does not help or hurt
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7612, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('moving beyond checkout radius auto checks out');
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732 })).open, false);
-  // Left the premises => next check-in needs a reason
-  const noReason = await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 });
-  assert.equal(noReason.status, 400); assert.equal(noReason.data.code, 'REASON_REQUIRED');
-  assert.equal((await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'ab' })).status, 400);
-  const back = ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Went out for a client meeting' })).record; t('re-check-in after leaving premises requires a reason');
-  // During lunch nobody is checked out for being outside the office
+  const IN = { lat: 26.7607, lng: 83.3733, accuracy: 5 }, OUT = { lat: 26.7650, lng: 83.3732, accuracy: 5 }; // OUT is ~490 m away, a precise fix
+  const pingAs = async (who, body) => ok(await who.call('POST', '/api/attendance/ping', body));
+  const inside = await pingAs(e, IN);
+  assert.equal(inside.open, true); assert.equal(inside.check, null);
+  assert.equal((await pingAs(e, { lat: 26.7612, lng: 83.3732, accuracy: 5 })).warning, undefined); // 67 m: well inside the 100 m geofence
+  // A far-away reading that is not a precise GPS fix (cell tower / Wi-Fi) never counts, however often it comes
+  for (let i = 0; i < 4; i++) assert.equal((await pingAs(e, { ...OUT, accuracy: 40 })).uncertain, true);
+  // Three precise fixes outside: the person is ASKED "Still in office?". Nobody is checked out by the location.
+  assert.equal((await pingAs(e, OUT)).warning, true); assert.equal((await pingAs(e, OUT)).check, null);
+  const asked = await pingAs(e, OUT);
+  assert.equal(asked.open, true); assert.equal(asked.check.status, 'ASKED'); assert.equal(asked.check.reason, 'GEOFENCE_EXIT'); assert.ok(asked.check.distance > 400);
+  let myDay = ok(await e.call('GET', '/api/dashboard')).today;
+  assert.equal(myDay.checkedIn, true); assert.equal(myDay.presence.status, 'ASKED'); t('geofence exit => "Still in office?" is asked, the session stays open');
+
+  // "Yes, in the office" while a precise fix says otherwise is not accepted on its own: it goes to review
+  assert.equal(ok(await e.call('POST', '/api/attendance/presence', { answer: 'IN_OFFICE', ...OUT })).status, 'REVIEW_REQUIRED');
+  assert.equal((await e.call('POST', '/api/attendance/presence', { answer: 'IN_OFFICE', ...IN })).status, 409); // already answered
+  const queue = ok(await admin.call('GET', '/api/attendance?review=1')).items;
+  assert.equal(queue.length, 1); assert.equal(queue[0].canReview, true);
+  const openSession = queue[0].sessions.find((x) => !x.checkOut), chk = openSession.checks[0];
+  assert.deepEqual(sessionCodes(openSession).map((k) => k.code), ['GEOFENCE_EXIT', 'REVIEW_REQUIRED']);
+  assert.equal((await e.call('POST', `/api/attendance/${queue[0]._id}/review`, { checkId: chk._id, decision: 'STAYED', note: 'I was inside' })).status, 403);
+  assert.equal((await admin.call('POST', `/api/attendance/${queue[0]._id}/review`, { checkId: chk._id, decision: 'STAYED' })).status, 400); // a note is required
+  ok(await admin.call('POST', `/api/attendance/${queue[0]._id}/review`, { checkId: chk._id, decision: 'STAYED', note: 'Was in the basement meeting room' }));
+  assert.equal((await admin.call('POST', `/api/attendance/${queue[0]._id}/review`, { checkId: chk._id, decision: 'LEFT', note: 'Changed my mind' })).status, 409);
+  myDay = ok(await e.call('GET', '/api/dashboard')).today;
+  assert.equal(myDay.checkedIn, true); assert.equal(myDay.presence, null); assert.equal(ok(await admin.call('GET', '/api/attendance?review=1')).items.length, 0); t('review "was in office": nothing changes, recorded with the reviewer and a note');
+
+  // Asked again; this time the person says they left. Still only a reviewer closes the session, at the time they choose.
+  await pingAs(e, OUT); await pingAs(e, OUT);
+  assert.equal((await pingAs(e, OUT)).check.status, 'ASKED');
+  assert.equal(ok(await e.call('POST', '/api/attendance/presence', { answer: 'LEFT' })).status, 'REVIEW_REQUIRED');
+  assert.equal(ok(await e.call('GET', '/api/dashboard')).today.checkedIn, true);
+  const q2 = ok(await admin.call('GET', '/api/attendance?review=1')).items[0];
+  const s2 = q2.sessions.find((x) => !x.checkOut), c2 = s2.checks.find((k) => k.status === 'REVIEW_REQUIRED');
+  assert.equal((await admin.call('POST', `/api/attendance/${q2._id}/review`, { checkId: c2._id, decision: 'LEFT', at: new Date(Date.now() + 3600000).toISOString(), note: 'Future time' })).status, 400);
+  ok(await admin.call('POST', `/api/attendance/${q2._id}/review`, { checkId: c2._id, decision: 'LEFT', note: 'Confirmed by the guard at the gate' }));
+  myDay = ok(await e.call('GET', '/api/dashboard')).today;
+  const closed = myDay.record.sessions.at(-1);
+  assert.equal(myDay.checkedIn, false); assert.equal(myDay.needsReason, false); assert.equal(closed.closeReason, 'REVIEW'); assert.equal(closed.checkOut, c2.since);
+  assert.deepEqual(sessionCodes(closed).map((k) => k.code), ['GEOFENCE_EXIT', 'REVIEWED', 'REVIEW_CHECKOUT']); t('review "left": checked out by the reviewer at the time the location changed');
+
+  // Back later: an ordinary new session, no reason asked
+  ok(await e.call('POST', '/api/attendance/check-in', IN)); t('checking in again after a review check-out is a normal new session');
+  // During lunch the location is not judged at all
   ok(await admin.call('PATCH', '/api/settings', { lunchStart: '00:00', lunchEnd: '23:59', reason: 'Simulate lunch time' }));
-  const atLunch = ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 }));
-  assert.equal(atLunch.lunch, true); assert.equal(atLunch.open, true); assert.equal(ok(await e.call('GET', '/api/dashboard')).office.lunchNow, true);
-  ok(await admin.call('PATCH', '/api/settings', { lunchStart: '00:00', lunchEnd: '00:01', reason: 'Lunch over' })); t('lunch break: no auto check-out, shown to everyone');
-  // ...and the earlier session carries on from its original check-in time: no new session, time away recorded
-  const resumed = back.sessions.at(-1);
-  assert.equal(back.sessions.length, 2); assert.equal(resumed.checkOut, undefined); assert.equal(resumed.autoCheckout, false);
-  assert.equal(resumed.breaks.length, 1); assert.equal(resumed.breaks[0].reason, 'Went out for a client meeting'); assert.ok(resumed.breaks[0].outAt && resumed.breaks[0].backAt); t('back after auto check-out: the old session continues, time away logged');
-  ok(await e.call('POST', '/api/attendance/check-out', { lat: 26.7607, lng: 83.3733 }));
-  ok(await e.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5 })); t('no reason needed after a normal check-out');
-  // ~155 m away with a good fix (e.g. the app reopened at home): still needs three precise reports, never just one
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).warning, true);
-  assert.equal(ok(await e.call('POST', '/api/attendance/ping', { lat: 26.7620, lng: 83.3732, accuracy: 5 })).autoCheckedOut, true); t('far away => auto check-out only after three precise reports');
+  for (let i = 0; i < 3; i++) { const p = await pingAs(e, OUT); assert.equal(p.lunch, true); assert.equal(p.check, null); }
+  assert.equal(ok(await e.call('GET', '/api/dashboard')).office.lunchNow, true);
+  ok(await admin.call('PATCH', '/api/settings', { lunchStart: '00:00', lunchEnd: '00:01', reason: 'Lunch over' })); t('lunch break: nobody is asked, shown to everyone');
+  ok(await e.call('POST', '/api/attendance/check-out', IN));
+  assert.equal(ok(await e.call('GET', '/api/dashboard')).today.record.sessions.at(-1).closeReason, 'MANUAL'); t('manual check-out carries its reason code');
 
   // Employee cannot use admin APIs or see others
   assert.equal((await e.call('GET', '/api/audit-logs')).status, 403);
@@ -281,14 +301,13 @@ try {
   assert.ok(welcome && welcome.text.includes('E-101') && welcome.text.includes(emp.tempPassword) && welcome.html.includes('<table'), 'welcome email with user id + password');
   assert.ok(mailsTo('coo@test.local').some((m) => /Welcome/.test(m.subject) && m.text.includes('Coo#Password1')), 'COO welcome with the admin-set password'); t('new account: welcome email with user ID + password + template');
   assert.ok(has('rahul@example.com', /Checked in (late )?at/) && has('rahul@example.com', /Checked out at/), 'employee check-in / check-out mails');
-  assert.ok(has('rahul@example.com', /checked out automatically/), 'employee auto check-out mail'); assert.ok(has('rahul@example.com', /Checked in late at/), 'late check-in email'); t('employee gets check-in (late), check-out and auto check-out emails');
-  assert.ok(has('admin-inbox@test.local', /re-entered after leaving/), 'admin re-entry mail'); assert.ok(has('coo@test.local', /re-entered after leaving/) || true);
+  assert.ok(has('rahul@example.com', /Still in office/), 'still-in-office mail'); assert.ok(has('rahul@example.com', /Checked in late at/), 'late check-in email'); t('employee gets check-in (late), check-out and "Still in office?" emails');
   assert.ok(has('admin-inbox@test.local', /Attendance corrected/) && has('admin-inbox@test.local', /Attendance voided/), 'attendance correction mails to admin');
   assert.ok(!has('rahul@example.com', /was corrected|was voided/), 'employee gets no correction mail'); t('attendance corrected/voided: admin emailed, employee not');
   assert.ok(has('amit@example.com', /Approval needed/), 'approver (manager) mail');
   assert.ok(has('admin-inbox@test.local', /Approved: profile change/), 'approved mail to admin');
   assert.ok(!has('rahul@example.com', /request was submitted|Approved:|Rejected:/), 'employee gets no request mails'); t('requests: approval-needed (approver) + outcome (admin); employee gets none');
-  const kinds = new Set(mailsTo('rahul@example.com').map((m) => (/Welcome/.test(m.subject) ? 'welcome' : /Checked (in|out)|checked out automatically/.test(m.subject) ? 'attendance' : m.subject)));
+  const kinds = new Set(mailsTo('rahul@example.com').map((m) => (/Welcome/.test(m.subject) ? 'welcome' : /Checked (in|out)|Still in office/.test(m.subject) ? 'attendance' : m.subject)));
   assert.deepEqual([...kinds].sort(), ['attendance', 'welcome']); t('employee mailbox: only welcome + check-in/check-out mails');
   assert.ok(has('coo@test.local', /Approval needed|Approved|Attendance|Profile updated/), 'COO gets approvals/changes');
   assert.ok(has('admin-inbox@test.local', /Profile updated: Rahul/) && !has('rahul@example.com', /Your details were updated/), 'direct edit mails'); t('direct profile edit: admin emailed, employee not');
@@ -396,17 +415,32 @@ try {
   // One task still has no update: checking out is refused until it does
   const early = await pe.call('POST', '/api/attendance/check-out', {});
   assert.equal(early.status, 400); assert.equal(early.data.code, 'TASK_UPDATE_REQUIRED'); assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.tasksPending, 1); t('check-out needs an update on every task of the day');
-  // A phone that stops reporting its location is checked out, at the time of its last report; coming back resumes the session
+  // A phone that stops reporting: the person is asked, never checked out. With no reply the record needs a review.
   const before = ok(await pe.call('GET', '/api/dashboard')).today.record.sessions.at(-1);
   assert.ok(before.lastPingAt, 'check-in counts as a location report');
-  assert.equal(ok(await cronCall('/api/cron/silent-check')).closed, 1);
-  const gone = ok(await pe.call('GET', '/api/dashboard')).today;
-  assert.equal(gone.checkedIn, false); assert.equal(gone.needsReason, true);
-  assert.equal(gone.record.sessions.at(-1).silent, true); assert.equal(gone.record.sessions.at(-1).checkOut, before.lastPingAt);
+  assert.deepEqual(ok(await cronCall('/api/cron/silent-check')), { asked: 1, escalated: 0 });
+  let peDay = ok(await pe.call('GET', '/api/dashboard')).today;
+  assert.equal(peDay.checkedIn, true); assert.equal(peDay.presence.status, 'ASKED'); assert.equal(peDay.presence.reason, 'SIGNAL_LOST');
   await wait(600);
-  assert.ok(ok(await pe.call('GET', '/api/notifications')).items.some((n) => /location stopped/.test(n.title)));
-  const again = ok(await pe.call('POST', '/api/attendance/check-in', { lat: 26.7607, lng: 83.3733, accuracy: 5, reason: 'Phone closed the app' })).record;
-  assert.equal(again.sessions.length, 1); assert.equal(again.sessions[0].silent, false); assert.match(again.sessions[0].breaks[0].reason, /location stopped/); t('no location for too long => checked out at the last report; return resumes the session');
+  assert.ok(ok(await pe.call('GET', '/api/notifications')).items.some((n) => n.title === 'Still in office?'));
+  // the location coming back inside settles it without anyone doing anything
+  assert.equal(ok(await pe.call('POST', '/api/attendance/ping', { lat: 26.7607, lng: 83.3733, accuracy: 5 })).check, null);
+  assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.record.sessions.at(-1).checks[0].outcome, 'SIGNAL_RESTORED'); t('signal lost => asked; location back inside settles it');
+  // asked again, no reply => review required; the HR of that person is told and decides
+  assert.equal(ok(await cronCall('/api/cron/silent-check')).asked, 1);
+  assert.deepEqual(ok(await cronCall('/api/cron/silent-check')), { asked: 0, escalated: 1 });
+  peDay = ok(await pe.call('GET', '/api/dashboard')).today;
+  assert.equal(peDay.checkedIn, true); assert.equal(peDay.presence.status, 'REVIEW_REQUIRED');
+  assert.equal((await pe.call('POST', '/api/attendance/presence', { answer: 'IN_OFFICE' })).status, 409);
+  await wait(600);
+  assert.ok(ok(await hrC.call('GET', '/api/notifications')).items.some((n) => /Attendance review needed: Priya Verma/.test(n.title)));
+  const hrQueue = ok(await hrC.call('GET', '/api/attendance?review=1')).items;
+  const peRec = hrQueue.find((r) => r.user._id === pv.user._id);
+  assert.equal(peRec.canReview, true);
+  const peCheck = peRec.sessions.at(-1).checks.find((k) => k.status === 'REVIEW_REQUIRED');
+  ok(await hrC.call('POST', `/api/attendance/${peRec._id}/review`, { checkId: peCheck._id, decision: 'STAYED', note: 'She was at her desk, phone battery saver' }));
+  assert.equal(ok(await pe.call('GET', '/api/dashboard')).today.checkedIn, true);
+  assert.equal(ok(await hrC.call('GET', '/api/dashboard')).overview.attention.reviewNeeded, 0); t('no reply => review required; HR reviews, the session was never closed');
   // Android app: its background service reports location with its own token (no login cookie)
   const trackToken = ok(await pe.call('POST', '/api/attendance/track-token')).token;
   const track = async (token, body) => { const res = await fetch(BASE + '/api/attendance/track', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };

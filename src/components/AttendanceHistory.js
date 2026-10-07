@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api, fmtTime } from '@/lib/client';
 import { Badge, Skeleton } from '@/components/ui';
 import { minutesText, label12 } from '@/lib/hours';
+import { checkText, sessionCodes } from '@/lib/presence';
 
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const TONE = { PRESENT: 'ok', ABSENT: 'bad', VOIDED: 'bad', WEEK_OFF: '', FUTURE: '', BEFORE_START: '' };
@@ -17,12 +18,11 @@ function Sessions({ day }) {
       {s.inPhotoUrl && <a href={s.inPhotoUrl} target="_blank" rel="noreferrer"><img className="thumb" src={s.inPhotoUrl} alt="In" /></a>}
       <span>{fmtTime(s.checkIn)} – {fmtTime(s.checkOut)}</span>
       {s.outPhotoUrl && <a href={s.outPhotoUrl} target="_blank" rel="noreferrer"><img className="thumb" src={s.outPhotoUrl} alt="Out" /></a>}
-      {s.corrected && <Badge tone="warn">corrected</Badge>}
-      {s.autoCheckout && <Badge tone="warn">{s.silent ? 'location stopped' : 'auto out'}</Badge>}
-      {s.endOfDay && <Badge>office closed</Badge>}
+      {sessionCodes(s).map((k) => <Badge key={k.code} tone={k.tone}>{k.label}</Badge>)}
+      {(s.checks || []).map((k) => <span key={k._id} className="muted small">{checkText(k)}</span>)}
       {s.lateReason && <span className="muted small">Late: {s.lateReason}</span>}
       {(s.breaks || []).map((b, i) => <span key={i} className="muted small">Away {fmtTime(b.outAt)} to {fmtTime(b.backAt)}{b.deductedMinutes ? ` (${minutesText(b.deductedMinutes)} not counted)` : ' (lunch, counted)'}: {b.reason}</span>)}
-      {s.inGeo?.verified === false && <Badge tone="bad">outside</Badge>}
+      {s.inGeo?.verified === false && <Badge tone="bad">Check-in outside</Badge>}
     </div>
   ));
 }

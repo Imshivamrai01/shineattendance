@@ -2,6 +2,7 @@
 // One-way reporting copy: MongoDB stays authoritative and nothing is read back into the app.
 
 import { dayFlags, minutesText } from './hours.js';
+import { checkText, sessionCodes } from './presence.js';
 
 export const SCRIPT_URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/;
 export const sheetsConfigured = (s) => !!(s?.sheetScriptUrl && s?.sheetScriptSecret);
@@ -17,9 +18,9 @@ export function rowFor(rec, hours, cfg) {
   const notes = [
     f?.late && `late by ${minutesText(f.lateMinutes)}${s[0]?.lateReason ? ` (${s[0].lateReason})` : ''}`,
     f?.early && `left ${minutesText(f.earlyMinutes)} early`,
-    s.some((x) => x.autoCheckout) && 'left premises (auto check-out)',
+    ...s.flatMap((x) => (x.checks || []).map(checkText)),
+    [...new Set(s.flatMap((x) => sessionCodes(x).map((k) => k.label)))].join(', '),
     s.some((x) => x.inGeo?.verified === false) && 'check-in outside geofence',
-    s.some((x) => x.corrected) && 'corrected by admin',
     rec.status === 'VOIDED' && `VOIDED: ${rec.voidReason || ''}`,
   ].filter(Boolean).join('; ');
   return [

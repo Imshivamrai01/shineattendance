@@ -5,6 +5,7 @@ import { completion, scopeFilter } from '@/lib/users';
 import { photosEnabled, photoUrl } from '@/lib/cloudinary';
 import { hoursWorked } from '@/lib/attendance';
 import { canActOn } from '@/lib/workflow';
+import { activeCheck, needsReview } from '@/lib/presence';
 import { afterHours, dayFlags, hoursCfg, inLunch, lunchCfg } from '@/lib/hours';
 
 const PENDING = ['PENDING_HR', 'PENDING_MANAGER', 'PENDING_COO', 'PENDING_ADMIN'];
@@ -32,6 +33,7 @@ async function overview(user, today, cfg) {
       checkIn: first?.checkIn, checkOut: last?.checkOut, open: r.sessions.some((s) => !s.checkOut),
       // Checked in but the phone has not reported its location for a while: nobody can tell whether they are still in the office.
       silentMinutes: silentFor(r.sessions.find((s) => !s.checkOut)),
+      review: r.sessions.some((s) => needsReview(s)),
       outside: r.sessions.some((s) => s.inGeo?.verified === false), auto: r.sessions.some((s) => s.autoCheckout),
       photo: photoUrl(first?.inPhoto), flags: dayFlags(r, cfg),
     };
@@ -69,6 +71,7 @@ async function overview(user, today, cfg) {
       lateToday: present.filter((p) => p.flags.late).length,
       autoCheckoutToday: present.filter((p) => p.auto).length,
       silentNow: cfgLunch ? 0 : present.filter((p) => p.open && p.silentMinutes).length,
+      reviewNeeded: await M.Attendance.countDocuments({ user: { $in: ids }, status: 'ACTIVE', 'sessions.checks.status': 'REVIEW_REQUIRED' }),
     },
     departments: Object.entries(deptCount).map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n),
   };
@@ -98,6 +101,9 @@ export const GET = handler(async ({ user }) => {
   };
   if (user.location) out.today.location = await M.Location.findById(user.location).select('name latitude longitude radiusMeters').lean();
   out.completion = completion(user);
+  // An unanswered / under-review "Still in office?" on my own record
+  const myCheck = (mine?.sessions || []).map((s) => activeCheck(s)).find(Boolean);
+  out.today.presence = myCheck ? { status: myCheck.status, reason: myCheck.reason, since: myCheck.since } : null;
   out.today.tasksPending = await M.Task.countDocuments({ user: user._id, date: today, status: 'PENDING' });
 
   if (user.role !== 'ADMIN') {

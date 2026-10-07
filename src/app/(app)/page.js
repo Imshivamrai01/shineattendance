@@ -80,7 +80,7 @@ function AttendanceCard({ data, reload }) {
       setAway(!!r.warning);
       if (typeof r.open === 'boolean' && r.open !== t.checkedIn && !r.autoCheckedOut) reload();
       if (r.autoCheckedOut) {
-        setMsg({ text: r.endOfDay ? 'Office hours are over, so you were checked out automatically.' : `You moved away from the office (${r.distance} m) so you were checked out automatically.` });
+        setMsg({ text: 'Office hours are over, so you were checked out automatically.' });
         reload();
       }
     };
@@ -121,8 +121,10 @@ function AttendanceCard({ data, reload }) {
         <button className="btn primary big" disabled={busy || t.checkedIn || (t.needsReason && reason.trim().length < 3) || (t.lateMinutes > 0 && lateReason.trim().length < 3)} onClick={() => act('check-in')}>{busy && !t.checkedIn ? 'Please wait…' : 'Check in'}</button>
         <button className="btn big" disabled={busy || !t.checkedIn} onClick={() => act('check-out')}>{busy && t.checkedIn ? 'Please wait…' : 'Check out'}</button>
       </div>
+      {t.presence?.status === 'ASKED' && <div className="alert warn" style={{ marginTop: 12 }}><b>Still in office?</b> {t.presence.reason === 'GEOFENCE_EXIT' ? 'Your location showed you outside the office' : 'We stopped receiving your location'} at {fmtTime(t.presence.since)}. Please confirm in the popup. You are still checked in.</div>}
+      {t.presence?.status === 'REVIEW_REQUIRED' && <div className="alert warn" style={{ marginTop: 12 }}>Your attendance is with your HR / Manager for review ({t.presence.reason === 'GEOFENCE_EXIT' ? 'location showed you outside' : 'location was lost'} at {fmtTime(t.presence.since)}). You are still checked in until they decide.</div>}
       {t.tasksPending > 0 && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>Add your update on {t.tasksPending === 1 ? 'your task' : `your ${t.tasksPending} tasks`} before checking out. <Link href="/tasks">Open Tasks</Link></div>}
-      {away && t.checkedIn && <div className="alert warn" style={{ marginTop: 12 }}>You appear to be leaving the office. Stay within range or you will be checked out.</div>}
+      {away && t.checkedIn && !t.presence && <div className="alert warn" style={{ marginTop: 12 }}>Your location shows you outside the office. If it stays that way you will be asked to confirm.</div>}
       {msg && <div className={`alert ${msg.ok ? 'ok' : ''}`} style={{ marginTop: 12 }}>{msg.text}</div>}
       {t.record?.sessions?.length > 0 && (
         <div className="scroll" style={{ marginTop: 10 }}><table>
@@ -218,7 +220,8 @@ function Overview({ me, d }) {
     o.attention.lateToday > 0 && { text: `${o.attention.lateToday} ${o.attention.lateToday === 1 ? 'person' : 'people'} checked in late today`, href: '/attendance' },
     o.attention.outsideToday > 0 && { text: `${o.attention.outsideToday} check-in(s) today were outside the geofence`, href: '/attendance' },
     o.attention.autoCheckoutToday > 0 && { text: `${o.attention.autoCheckoutToday} auto check-out(s) today (left the office)`, href: '/attendance' },
-    o.attention.silentNow > 0 && { text: `${o.attention.silentNow} checked-in ${o.attention.silentNow === 1 ? 'phone is' : 'phones are'} not sending location (app closed or stopped by the phone)`, href: '/attendance' },
+    o.attention.reviewNeeded > 0 && { text: `${o.attention.reviewNeeded} attendance record${o.attention.reviewNeeded === 1 ? '' : 's'} need${o.attention.reviewNeeded === 1 ? 's' : ''} your review ("Still in office?" not confirmed)`, href: '/attendance?review=1' },
+    o.attention.silentNow > 0 && { text: `${o.attention.silentNow} checked-in ${o.attention.silentNow === 1 ? 'phone is' : 'phones are'} not sending location (they have been asked to confirm)`, href: '/attendance' },
   ].filter(Boolean);
   const maxDept = Math.max(1, ...o.departments.map((x) => x.n));
 
@@ -244,7 +247,7 @@ function Overview({ me, d }) {
           <div className="row between"><h2>Today's attendance</h2><Link className="small" href="/attendance">View all</Link></div>
           {o.present.length === 0 ? <p className="muted">Nobody has checked in yet today.</p> : o.present.map((p) => (
             <Person key={p.id} name={p.name} photo={p.photo} sub={`${p.employeeId || ''} · in ${fmtTime(p.checkIn)}${p.checkOut ? ` · out ${fmtTime(p.checkOut)}` : ''}`}
-              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Checked out</Badge>}{p.open && p.silentMinutes > 0 && !d.office?.lunchNow && <Badge tone="bad">No location {minutesText(p.silentMinutes)}</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
+              right={<>{p.open ? <Badge tone="ok">In office</Badge> : <Badge>Checked out</Badge>}{p.review && <Badge tone="bad">Review required</Badge>}{p.open && !p.review && p.silentMinutes > 0 && !d.office?.lunchNow && <Badge tone="warn">No location {minutesText(p.silentMinutes)}</Badge>}{p.flags?.late && <Badge tone="warn">Late {minutesText(p.flags.lateMinutes)}</Badge>}{p.outside && <Badge tone="bad">Outside</Badge>}{p.auto && <Badge tone="warn">Auto out</Badge>}</>} />
           ))}
         </div>
         <div className="card">

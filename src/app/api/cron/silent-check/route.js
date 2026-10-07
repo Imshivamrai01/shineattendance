@@ -1,9 +1,10 @@
 import { handler } from '@/lib/http';
 import { requireCron } from '@/lib/cron';
-import { silentCheckout } from '@/lib/attendance';
+import { presenceSweep } from '@/lib/attendance';
 
-// Every 5 minutes: check out anyone whose phone has stopped reporting its location (see silentCheckout).
+// Every 5 minutes: ask "Still in office?" when a phone stops reporting, and send unanswered questions to review.
+// Nobody is checked out here (see presenceSweep).
 export const GET = handler(async (ctx) => {
   requireCron(ctx.req);
-  return silentCheckout(ctx);
+  return presenceSweep(ctx);
 }, { roles: false });
