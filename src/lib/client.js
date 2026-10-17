@@ -1,8 +1,8 @@
 'use client';
 
-export async function api(path, { method = 'GET', body, raw } = {}) {
+export async function api(path, { method = 'GET', body, raw, timeout = 60000 } = {}) {
   const res = await fetch(`/api${path}`, {
-    method, credentials: 'same-origin', signal: AbortSignal.timeout(60000),
+    method, credentials: 'same-origin', signal: AbortSignal.timeout(timeout),
     headers: body ? { 'content-type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });

@@ -84,3 +84,12 @@ npx wrangler tail                  # live logs
 - **Reason codes** on every session: Manual check-out, Office closed, Checked out by review, Signal lost, Geofence exit, Employee confirmed, Review required, Reviewed, Admin correction. Every ask, answer, review and correction is in the audit log.
 - Defaults: check-in within 50 m, "outside" beyond 100 m (per location, editable).
 - **Profile photo**: people upload their own (Admin can change anyone's); stored privately in Cloudinary like attendance photos.
+
+## Sales (leads, calls, follow-ups)
+
+`/sales` — Admin and COO always; others once given **Agent** or **Manager** access under Sales → Team. Agents see only the leads given to them; managers see every lead, assign them (one by one or in bulk) and see the team board.
+
+- **Lead finder**: category + location → businesses with name, phone, address, Instagram, website, rating. Uses Google Places (New) when a key is saved under Sales → Team (tested before saving, kept server-side), otherwise OpenStreetMap (free, but few phone numbers and the public servers are often busy). Each business website is opened once to pick up its Instagram and email.
+- **No duplicates**: a business matches an existing lead by phone (any format), Google / OSM id, Instagram, or name at the same spot. A match is not added again: its *found* count goes up and it appears under **Repeat** leads (and under *Already in CRM* in the finder results).
+- **Quality**: Hot / Warm / Cold score from the data (mobile number, Instagram, website, rating, reviews) adjusted by calls and status; the lead page shows why (`scoreLead` in `lib/sales.js`).
+- **Calls & follow-ups**: every call (outcome, note, next follow-up), status change and hand-over is on the lead's timeline with who and when. Overview shows how many leads were called, calls today, follow-ups due / overdue. CSV export keeps the current filters.

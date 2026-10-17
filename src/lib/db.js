@@ -15,6 +15,9 @@ import '../models/Counter.js';
 import '../models/Task.js';
 import '../models/Notification.js';
 import '../models/WaMessage.js';
+import '../models/Lead.js';
+import '../models/LeadActivity.js';
+import '../models/ScrapeJob.js';
 
 const g = globalThis;
 g.__mongo ||= { conn: null, promise: null };
@@ -121,6 +124,9 @@ export const M = {
   get Task() { return model('Task'); },
   get Notification() { return model('Notification'); },
   get WaMessage() { return model('WaMessage'); },
+  get Lead() { return model('Lead'); },
+  get LeadActivity() { return model('LeadActivity'); },
+  get ScrapeJob() { return model('ScrapeJob'); },
 };
 
 export async function getSettings() {

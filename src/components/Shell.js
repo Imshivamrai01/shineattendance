@@ -21,6 +21,7 @@ const NAV = [
   { href: '/users', label: 'People', icon: 'users', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
   { href: '/departments', label: 'Departments', icon: 'building', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
   { href: '/locations', label: 'Locations', icon: 'pin', roles: ['ADMIN', 'COO', 'MANAGER', 'HR'] },
+  { href: '/sales', label: 'Sales', icon: 'target', show: (me) => ['ADMIN', 'COO'].includes(me.role) || ['AGENT', 'MANAGER'].includes(me.salesAccess) },
   { href: '/crm', label: 'CRM', icon: 'chat', roles: ['ADMIN', 'COO'] },
   { href: '/users/import', label: 'Import', icon: 'upload', roles: ['ADMIN'] },
   { href: '/admin/audit-logs', label: 'Audit logs', icon: 'shield', roles: ['ADMIN'] },
@@ -79,7 +80,7 @@ export default function Shell({ children }) {
   }, [me, path]);
 
   if (!me) return <Splash />;
-  const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role));
+  const items = NAV.filter((n) => (n.show ? n.show(me) : !n.roles || n.roles.includes(me.role)));
   const active = items.filter((n) => (n.href === '/' ? path === '/' : path === n.href || path.startsWith(n.href + '/')))
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
   const logout = async () => { await api('/auth/logout', { method: 'POST' }); router.replace('/login'); };

@@ -11,6 +11,8 @@ const S = new mongoose.Schema({
   notificationEmail: String,
   // WhatsApp Cloud API (CRM page). The token never leaves the server.
   waPhoneId: String, waBusinessId: String, waToken: String,
+  // Google Places API key for the Sales lead finder (OpenStreetMap is used without it). Never sent to the browser.
+  placesKey: String,
   lastSheetSync: Date, lastMailError: String, mailEveryCheckin: { type: Boolean, default: false }, lastAbsentMailDate: String, lastMailErrorAt: Date, lastSheetError: String, lastSheetErrorAt: Date,
 }, { timestamps: true });
 export default mongoose.models.Setting || mongoose.model('Setting', S);

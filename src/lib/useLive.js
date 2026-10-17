@@ -14,7 +14,9 @@ export function useLive(load, ms = 20000) {
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('focus', refresh);
     window.addEventListener('attendance:changed', refresh);
+    window.addEventListener('sales:changed', refresh);
     return () => {
+      window.removeEventListener('sales:changed', refresh);
       clearInterval(timer);
       document.removeEventListener('visibilitychange', refresh);
       window.removeEventListener('focus', refresh);

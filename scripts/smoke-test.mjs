@@ -8,6 +8,7 @@ import { simpleParser } from 'mailparser';
 import { awayMs, dayFlags, label12, workedHours } from '../src/lib/hours.js';
 import { normalizePhone } from '../src/lib/whatsapp.js';
 import { startWaMock } from './wa-mock.mjs';
+import { startPlacesMock, PLACES_KEY } from './places-mock.mjs';
 import { sessionCodes } from '../src/lib/presence.js';
 import { taskPoints } from '../src/lib/taskScore.js';
 
@@ -24,15 +25,15 @@ const has = (addr, re) => mailsTo(addr).some((m) => re.test(m.subject));
 
 const PORT = 3111, BASE = `http://localhost:${PORT}`;
 const mongo = await MongoMemoryServer.create();
-const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', PRESENCE_OUT_SECONDS: '0', PRESENCE_SILENT_MINUTES: '0', PRESENCE_REPLY_MINUTES: '0', PRESENCE_COOLDOWN_MINUTES: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999' };
-const wa = startWaMock(3999);
+const env = { ...process.env, MONGODB_URI: mongo.getUri('smoke'), ADMIN_EMAIL: 'admin@shineinfo.in', ADMIN_INITIAL_PASSWORD: 'Shineinfo@2026', NODE_ENV: 'production', CLOUDINARY_CLOUD_NAME: '', CLOUDINARY_API_KEY: '', CLOUDINARY_API_SECRET: '', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '2525', SMTP_INSECURE: '1', SMTP_FROM: 'Shine <noreply@test.local>', APP_URL: 'https://app.test.local', CRON_SECRET: 'cron-secret-for-tests', REPORT_EMAIL: 'report@test.local', PRESENCE_OUT_SECONDS: '0', PRESENCE_SILENT_MINUTES: '0', PRESENCE_REPLY_MINUTES: '0', PRESENCE_COOLDOWN_MINUTES: '0', WHATSAPP_GRAPH_URL: 'http://127.0.0.1:3999', PLACES_URL: 'http://127.0.0.1:3998' };
+const wa = startWaMock(3999), places = startPlacesMock(3998);
 
 const seed = () => new Promise((res) => { let out = ''; const p = spawn('node', ['scripts/seed-admin.mjs'], { env }); p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d)); p.on('exit', () => res({ stdout: out, stderr: '' })); });
 let r = await seed(); assert.match(r.stdout, /created/, r.stdout + r.stderr);
 r = await seed(); assert.match(r.stdout, /already exists/, 'seed must be idempotent');
 
 const server = spawn('npx', ['next', 'start', '-p', String(PORT)], { env, shell: true, stdio: 'ignore' });
-const cleanup = async () => { spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F']); await mongo.stop(); smtp.close(); wa.close(); };
+const cleanup = async () => { spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F']); await mongo.stop(); smtp.close(); wa.close(); places.close(); };
 
 class Client {
   constructor() { this.cookie = ''; }
@@ -463,6 +464,59 @@ try {
   assert.ok(mailsTo('priya@example.com').some((m) => /^New task for .*Call 20 leads/.test(m.subject) && m.text.includes('Gorakhpur list')), 'task assignment email');
   assert.equal(outbox.filter((m) => /Attendance report|Attendance summary|Absent so far/.test(m.subject) && !m.to.includes('report@test.local')).length, 0, 'report goes nowhere else');
   t('evening report (attendance + tasks) goes only to the report address');
+
+  // Sales: access, lead finder, repeat leads, calls / follow-ups, agent visibility
+  assert.equal((await pe.call('GET', '/api/sales')).status, 403);
+  assert.equal((await admin.call('POST', '/api/sales/config', { placesKey: `AIza${'y'.repeat(35)}` })).status, 400);
+  ok(await admin.call('POST', '/api/sales/config', { placesKey: PLACES_KEY }));
+  ok(await admin.call('POST', '/api/sales/config', { userId: pv.user._id, salesAccess: 'AGENT' }));
+  assert.equal(ok(await pe.call('GET', '/api/auth/me')).user.salesAccess, 'AGENT');
+  assert.equal(ok(await admin.call('GET', '/api/settings')).settings.placesKey, undefined, 'places key never sent to the browser');
+  assert.equal(ok(await pe.call('GET', '/api/sales')).role, 'AGENT'); t('sales access: Google key checked before saving, agent access given');
+  const run1 = ok(await admin.call('POST', '/api/sales/scrape', { category: 'Cafe', location: 'Golghar, Gorakhpur', assignTo: pv.user._id }));
+  assert.equal(run1.fresh.length, 2); assert.equal(run1.repeat.length, 0); assert.equal(run1.job.skipped, 1); assert.equal(run1.job.source, 'GOOGLE');
+  const cafe1 = run1.fresh.find((l) => l.name === 'Cafe One'), brew = run1.fresh.find((l) => l.name === 'Brew Brothers');
+  assert.equal(cafe1.instagram, 'https://instagram.com/cafe.one_gkp', 'instagram read from the website');
+  assert.equal(brew.instagram, 'https://instagram.com/brewbros.gkp', 'instagram given as the website');
+  assert.equal(cafe1.grade, 'HOT'); assert.ok(!run1.fresh.some((l) => /Closed/.test(l.name)), 'closed businesses skipped'); t('lead finder: new leads saved with phone, address, Instagram and a quality grade');
+  const run2 = ok(await admin.call('POST', '/api/sales/scrape', { category: 'cafe', location: 'Gorakhpur' }));
+  assert.equal(run2.fresh.length, 0); assert.equal(run2.repeat.length, 2); assert.ok(run2.repeat.every((l) => l.timesFound === 2 && l.assignedName === 'Priya Verma'));
+  const dupe = ok(await pe.call('POST', '/api/sales/leads', { name: 'Cafe 1 (typed)', phone: '+91 98765-43210' }));
+  assert.equal(dupe.repeat, true); assert.equal(dupe.lead.name, 'Cafe One'); assert.equal(dupe.lead.timesFound, 3);
+  const myRepeats = ok(await pe.call('GET', '/api/sales/leads?bucket=repeat'));
+  assert.equal(myRepeats.total, 2); assert.equal(ok(await pe.call('GET', '/api/sales/leads?bucket=fresh')).total, 0); t('same business found again (search or by hand) is not added twice: it becomes a repeat lead');
+  const tomorrow = new Date(Date.now() + 86400000).toISOString();
+  let lc = ok(await pe.call('POST', `/api/sales/leads/${cafe1._id}/activity`, { type: 'CALL', outcome: 'CONNECTED', note: 'Owner wants a demo', followUpAt: tomorrow })).lead;
+  assert.equal(lc.status, 'FOLLOW_UP'); assert.equal(lc.callCount, 1); assert.equal(new Date(lc.nextFollowUpAt).toISOString(), tomorrow);
+  lc = ok(await pe.call('POST', `/api/sales/leads/${brew._id}/activity`, { type: 'CALL', outcome: 'WRONG_NUMBER' })).lead;
+  assert.equal(lc.status, 'INVALID'); assert.equal(lc.score, 0); assert.equal(lc.grade, 'COLD');
+  assert.equal((await pe.call('POST', `/api/sales/leads/${brew._id}/activity`, { type: 'CALL' })).status, 400);
+  const ov = ok(await admin.call('GET', '/api/sales'));
+  assert.equal(ov.counts.called, 2); assert.equal(ov.today.calls, 2); assert.equal(ov.counts.repeat, 2);
+  assert.equal(ov.board.find((u) => u.name === 'Priya Verma').callsToday, 2);
+  const det = ok(await admin.call('GET', `/api/sales/leads/${cafe1._id}`));
+  assert.ok(det.activity.some((a) => a.type === 'CALL' && a.by.name === 'Priya Verma' && a.note === 'Owner wants a demo' && a.followUpAt));
+  assert.ok(det.activity.filter((a) => a.type === 'FOUND_AGAIN').length === 2); t('calls: who called, outcome, follow-up and status on the timeline; overview counts called leads');
+  // Click-to-call: pressing Call records the call (pending) before dialling; the caller then fills in what happened
+  const dial = ok(await pe.call('POST', `/api/sales/leads/${cafe1._id}/call`, { phone: cafe1.phone }));
+  assert.equal(dial.activity.outcome, 'PENDING'); assert.equal(dial.lead.callCount, 2);
+  assert.equal(ok(await pe.call('POST', `/api/sales/leads/${cafe1._id}/call`, {})).activity._id, dial.activity._id, 'double tap reuses the same call');
+  assert.equal(ok(await pe.call('GET', '/api/sales')).myPending.length, 1);
+  assert.equal((await admin.call('GET', '/api/sales')).data.myPending.length, 0);
+  const cut = ok(await pe.call('PATCH', `/api/sales/leads/${cafe1._id}/call`, { activityId: dial.activity._id, outcome: 'CALL_CUT', note: 'Cut after 10 sec', followUpAt: tomorrow, durationSec: 14 }));
+  assert.equal(cut.activity.durationSec, 14); assert.equal(cut.lead.lastOutcome, 'CALL_CUT'); assert.equal(cut.lead.status, 'FOLLOW_UP');
+  assert.equal((await pe.call('PATCH', `/api/sales/leads/${cafe1._id}/call`, { activityId: dial.activity._id, outcome: 'CONNECTED' })).status, 400, 'a call is updated once');
+  const log = ok(await admin.call('GET', '/api/sales/calls'));
+  assert.equal(log.people.find((p) => p.name === 'Priya Verma').calls, 3);
+  assert.ok(log.calls.some((c) => c.outcome === 'CALL_CUT' && c.by.name === 'Priya Verma' && c.note === 'Cut after 10 sec'));
+  assert.equal(ok(await pe.call('GET', '/api/sales')).myPending.length, 0); t('click-to-call: call recorded before dialling with the caller name, outcome filled in after, call log per person');
+  const gymLead = ok(await admin.call('POST', '/api/sales/leads', { name: 'Admin Only Gym', phone: '9000012345' })).lead;
+  assert.equal((await pe.call('GET', `/api/sales/leads/${gymLead._id}`)).status, 404);
+  assert.equal((await pe.call('POST', '/api/sales/leads/bulk', { ids: [gymLead._id], assignedTo: pv.user._id })).status, 403);
+  ok(await admin.call('POST', '/api/sales/leads/bulk', { ids: [gymLead._id], assignedTo: pv.user._id }));
+  assert.equal(ok(await pe.call('GET', `/api/sales/leads/${gymLead._id}`)).lead.name, 'Admin Only Gym');
+  const leadsCsv = await fetch(BASE + '/api/sales/export', { headers: { cookie: admin.cookie } }).then((r) => r.text());
+  assert.ok(leadsCsv.includes('Times found') && leadsCsv.includes('Cafe One')); t('agents see only their leads; managers assign in bulk; CSV export');
 
   // Security: lock an account
   for (let i = 0; i < 5; i++) await new Client().call('POST', '/api/auth/login', { identifier: 'amit@example.com', password: 'wrong-password' });

@@ -30,6 +30,8 @@ const UserSchema = new Schema({
   location: { type: Schema.Types.ObjectId, ref: 'Location' },
   trackTokenHash: { type: String, select: false, index: true, sparse: true }, // Android app's background location service (see lib/auth)
   statusReason: String,
+  // Sales page: AGENT works the leads assigned to them, MANAGER sees and assigns every lead (Admin / COO always can).
+  salesAccess: { type: String, enum: ['NONE', 'AGENT', 'MANAGER'], default: 'NONE' },
   createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
