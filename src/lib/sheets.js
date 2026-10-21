@@ -142,7 +142,7 @@ export const replaceTasks = (settings, rows) => post(settings, { action: 'replac
 // ---- AI Calls tab: one row per call handled by the AI voice agent, keyed by the carrier call id ----
 export const AI_TAB = 'AI Call Log';
 export const AI_HEADER = ['Key', 'Date', 'Time', 'Call type', 'Direction', 'Phone', 'Name', 'Company', 'Requirement', 'Outcome', 'Interest', 'Callback at', 'Callback handled',
-  'Accepted', 'Appointment', 'Rating', 'Feedback', 'Summary', 'Duration (s)', 'Recording', 'Lead', 'Status', 'Updated'];
+  'Accepted', 'Appointment', 'Rating', 'Feedback', 'Summary', 'Duration (s)', 'Transferred to', 'Team talk (s)', 'Team summary', 'Recording', 'Lead', 'Status', 'Updated'];
 const istDate = (d) => (d ? new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '');
 
 /** `c` = AiCall with `lead` populated ({ name }). Links point into the CRM, never at the carrier's recording URL. */
@@ -154,6 +154,7 @@ export function aiCallRow(c, appUrl) {
     c.interest || '', c.callbackRequested ? (c.callbackAt ? new Date(c.callbackAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Yes (no time given)') : '',
     c.callbackRequested ? (c.handledAt ? 'Yes' : 'No') : '', c.accepted == null ? '' : c.accepted ? 'Yes' : 'No',
     c.appointmentAt ? new Date(c.appointmentAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '', c.rating ?? '', c.feedback || '', c.summary || '', c.durationSec ?? '',
+    c.transfer?.status ? (c.transfer.toName || (c.transfer.status === 'NO_ANSWER' ? 'Nobody picked up' : c.transfer.status)) : '', c.transfer?.durationSec ?? '', c.transfer?.summary || '',
     c.recordingId && base ? `${base}/sales?tab=ai&call=${c._id}` : '', c.lead?._id && base ? `${base}/sales/leads/${c.lead._id}` : (c.lead?.name || ''), c.status || '', new Date().toISOString(),
   ];
 }

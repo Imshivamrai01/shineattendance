@@ -5,10 +5,11 @@ import { queueAiCallSync, loadAiCall } from '@/lib/aiCalls';
 // One AI call with its transcript.
 export const GET = salesHandler(async (ctx) => {
   const call = await loadAiCall(ctx);
-  await call.populate([{ path: 'lead', select: 'name phone status assignedTo nextFollowUpAt' }, { path: 'requestedBy', select: 'name' }, { path: 'handledBy', select: 'name' }]);
+  await call.populate([{ path: 'lead', select: 'name phone status assignedTo nextFollowUpAt' }, { path: 'requestedBy', select: 'name' }, { path: 'handledBy', select: 'name' }, { path: 'transfer.to', select: 'name' }]);
   const out = call.toObject();
   delete out.recordingUrl; // the browser plays it through /recording, never from the carrier directly
   out.hasRecording = !!call.recordingId;
+  out.hasTransferRecording = !!call.transfer?.recordingId;
   return { call: out };
 });
 

@@ -34,6 +34,16 @@ const S = new Schema({
   accepted: Boolean, appointmentAt: Date, rating: Number, feedback: { type: String, maxlength: 1000 },
   // Recording stays at VoBiz; the CRM streams it through its own access check (never hands out the VoBiz URL)
   recordingId: String, recordingUrl: String, recordingDurationSec: Number,
+  // Live transfer to a person: who answered, how long they talked, and that part's recording / transcript / summary
+  transfer: {
+    status: { type: String, enum: ['REQUESTED', 'RINGING', 'CONNECTED', 'ENDED', 'NO_ANSWER', 'FAILED'] },
+    to: { type: Schema.Types.ObjectId, ref: 'User' }, toName: String, tried: [String],
+    ringing: [{ type: Schema.Types.ObjectId, ref: 'User' }], // people being rung right now (busy for other callers)
+    requestedAt: Date, answeredAt: Date, endedAt: Date, durationSec: Number, reason: String,
+    recordingId: String, recordingDurationSec: Number,
+    transcript: [{ _id: false, role: { type: String, enum: ['team', 'customer'] }, content: String }],
+    summary: { type: String, maxlength: 1500 },
+  },
   // A sales person picked up the callback
   handledBy: { type: Schema.Types.ObjectId, ref: 'User' }, handledAt: Date,
   appliedToLead: { type: Boolean, default: false }, // the lead was updated from this call (done once)

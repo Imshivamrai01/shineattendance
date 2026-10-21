@@ -27,7 +27,7 @@ export const GET = salesHandler(async (ctx) => {
     const or = [{ callerName: rx }, { company: rx }, { requirement: rx }, { summary: rx }, ...(digits.length >= 4 ? [{ phoneKey: new RegExp(digits) }] : [])];
     if (f.$or) { f.$and = [...(f.$and || []), { $or: f.$or }, { $or: or }]; delete f.$or; } else f.$or = or;
   }
-  const calls = await M.AiCall.find(f).select('-transcript').sort(q.get('view') === 'callbacks' ? { callbackAt: 1 } : { createdAt: -1 }).limit(300)
+  const calls = await M.AiCall.find(f).select('-transcript -transfer.transcript').sort(q.get('view') === 'callbacks' ? { callbackAt: 1 } : { createdAt: -1 }).limit(300)
     .populate('lead', 'name status assignedTo').populate('requestedBy', 'name').populate('handledBy', 'name').lean();
 
   const today = { ...scope, status: { $nin: ['SCHEDULED', 'CANCELLED'] }, createdAt: { $gte: startOfTodayIst() } };

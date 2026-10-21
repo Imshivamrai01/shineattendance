@@ -7,7 +7,7 @@ const crm = (fn) => handler(async (ctx) => fn({ ...ctx, sales: 'MANAGER' }), { r
 
 export const GET = crm(async (ctx) => {
   const [calls, queue] = await Promise.all([
-    M.AiCall.find({ lead: null, status: { $nin: ['SCHEDULED', 'CANCELLED'] } }).select('-transcript').sort({ createdAt: -1 }).limit(100).lean(),
+    M.AiCall.find({ lead: null, status: { $nin: ['SCHEDULED', 'CANCELLED'] } }).select('-transcript -transfer.transcript').sort({ createdAt: -1 }).limit(100).lean(),
     queueStatus(ctx),
   ]);
   return { calls, queue, connected: aiConfigured() };

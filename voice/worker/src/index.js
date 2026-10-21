@@ -1,4 +1,5 @@
 import { VoiceSession } from './session.js';
+import { vobizHeaders, crmEvent, keys, dialXml, xml, esc, mediaUrl, sorryXml, targetFor, transcribeTransfer } from './transfer.js';
 
 export { VoiceSession };
 
@@ -14,7 +15,6 @@ const SID = /^[a-zA-Z0-9-]{8,64}$/;
 const session = (env, sid) => env.SESSION.get(env.SESSION.idFromName(sid));
 const setMeta = (env, sid, meta) => session(env, sid).fetch(new Request('https://do/meta', { method: 'POST', body: JSON.stringify(meta) }));
 const getMeta = async (env, sid) => (await session(env, sid).fetch(new Request('https://do/meta'))).json();
-const vobizHeaders = (env) => ({ 'X-Auth-ID': env.VOBIZ_AUTH_ID, 'X-Auth-Token': env.VOBIZ_AUTH_TOKEN });
 
 async function formOrJson(req) {
   const type = req.headers.get('content-type') || '';
@@ -23,14 +23,6 @@ async function formOrJson(req) {
   return f ? Object.fromEntries(f) : {};
 }
 
-/** Tell the CRM directly (no session involved), e.g. a call that never connected. */
-async function crmEvent(env, payload) {
-  if (!env.CRM_WEBHOOK_URL || !env.CRM_WEBHOOK_SECRET) return;
-  const res = await fetch(env.CRM_WEBHOOK_URL, {
-    method: 'POST', headers: { authorization: `Bearer ${env.CRM_WEBHOOK_SECRET}`, 'content-type': 'application/json' }, body: JSON.stringify(payload),
-  }).catch((err) => ({ ok: false, status: 0, text: async () => err.message }));
-  if (!res.ok) console.error('CRM webhook', payload.event, res.status, (await res.text()).slice(0, 200));
-}
 
 // ---- CRM -> worker (Bearer CRM_WEBHOOK_SECRET) ----
 
@@ -69,12 +61,12 @@ async function dial(req, env, ctx) {
 
 // ---- Recordings: VoBiz deletes them after 30 days, so each one is copied into our own R2 bucket ----
 
-const recKey = (env, callId) => `${env.RECORDINGS_PREFIX || 'calls'}/${callId}.mp3`;
+const recKey = (env, callId, part = '') => (part === 'transfer' ? keys.transfer(env, callId) : keys.ai(env, callId));
 
 /** Copy one recording from VoBiz into R2 (retries while VoBiz is still finalising the file). Returns the R2 key or null. */
-async function archiveRecording(env, callId, url) {
+async function archiveRecording(env, callId, url, part = '') {
   if (!env.RECORDINGS || !url) return null;
-  const key = recKey(env, callId);
+  const key = recKey(env, callId, part);
   if (await env.RECORDINGS.head(key)) return key;
   for (let i = 0; i < 4; i++) {
     try {
@@ -84,9 +76,9 @@ async function archiveRecording(env, callId, url) {
         if (body.byteLength > 0) {
           await env.RECORDINGS.put(key, body, {
             httpMetadata: { contentType: res.headers.get('content-type') || 'audio/mpeg' },
-            customMetadata: { callId, source: 'vobiz', copiedAt: new Date().toISOString() },
+            customMetadata: { callId, part: part || 'ai', source: 'vobiz', copiedAt: new Date().toISOString() },
           });
-          await setMeta(env, callId, { recordingKey: key });
+          await setMeta(env, callId, part === 'transfer' ? { transferRecordingKey: key } : { recordingKey: key });
           console.log('recording archived', key, body.byteLength);
           return key;
         }
@@ -110,9 +102,10 @@ async function recording(req, env, url) {
   const sid = url.searchParams.get('call') || '';
   if (!SID.test(sid)) return new Response('Bad call id', { status: 400 });
   const meta = await getMeta(env, sid);
+  const part = url.searchParams.get('part') === 'transfer' ? 'transfer' : '';
   if (env.RECORDINGS) {
     const range = r2Range(req.headers.get('range'));
-    const obj = await env.RECORDINGS.get(meta.recordingKey || recKey(env, sid), range ? { range } : {});
+    const obj = await env.RECORDINGS.get((part ? meta.transferRecordingKey : meta.recordingKey) || recKey(env, sid, part), range ? { range } : {});
     if (obj) {
       const headers = new Headers({ 'content-type': obj.httpMetadata?.contentType || 'audio/mpeg', 'accept-ranges': 'bytes', etag: obj.httpEtag });
       if (range && obj.range) {
@@ -126,10 +119,11 @@ async function recording(req, env, url) {
       return new Response(obj.body, { headers });
     }
   }
-  if (!meta.recordingUrl) return new Response('No recording', { status: 404 });
+  const source = part ? meta.transferRecordingUrl : meta.recordingUrl;
+  if (!source) return new Response('No recording', { status: 404 });
   const headers = { ...vobizHeaders(env) };
   if (req.headers.get('range')) headers.range = req.headers.get('range');
-  const res = await fetch(meta.recordingUrl, { headers });
+  const res = await fetch(source, { headers });
   return new Response(res.body, { status: res.status, headers: res.headers });
 }
 
@@ -185,6 +179,80 @@ export default {
         ctx.waitUntil(crmEvent(env, { event: 'call.failed', callId, direction: meta.direction, phone: meta.phone, leadId: meta.leadId, requestedBy: meta.requestedBy, purpose: meta.purpose, hangupCause: p.HangupCause || p.CallStatus }));
       }
       return new Response('OK');
+    }
+
+    // ---- Live transfer (VoBiz callbacks; the session started it with the Transfer API) ----
+
+    if (url.pathname.startsWith('/vobiz/') && ['/vobiz/transfer', '/vobiz/transfer-result', '/vobiz/transfer-event', '/vobiz/whisper', '/vobiz/media', '/vobiz/transfer-recording'].includes(url.pathname)) {
+      if (!authed) return new Response('Forbidden', { status: 403 });
+      const callId = url.searchParams.get('call') || '';
+
+      // Audio files VoBiz plays (whisper for the person, "nobody is free" for the caller).
+      if (url.pathname === '/vobiz/media') {
+        const f = url.searchParams.get('f') || '';
+        if (!/^[a-zA-Z0-9-]{1,80}$/.test(f)) return new Response('Bad file', { status: 400 });
+        const obj = await env.RECORDINGS.get(keys.media(env, f));
+        return obj ? new Response(obj.body, { headers: { 'content-type': 'audio/mpeg' } }) : new Response('Not found', { status: 404 });
+      }
+      if (!SID.test(callId)) return new Response('Bad call id', { status: 400 });
+      const meta = await getMeta(env, callId);
+      const tx = meta.transfer;
+      if (!tx?.targets?.length) return url.pathname === '/vobiz/transfer' ? sorryXml(env) : new Response('OK');
+      const p = req.method === 'POST' ? await formOrJson(req) : {};
+
+      if (url.pathname === '/vobiz/transfer') return new Response(dialXml(env, callId, tx, 0, { record: true }), { headers: { 'Content-Type': 'application/xml' } });
+
+      // What the person hears when they pick up, before being connected.
+      if (url.pathname === '/vobiz/whisper') return xml(`
+  <Play>${esc(mediaUrl(env, `${callId}-whisper`))}</Play>
+`);
+
+      // B-leg lifecycle: who answered, when they hung up.
+      if (url.pathname === '/vobiz/transfer-event') {
+        const ev = String(p.Event || p.DialAction || '').toLowerCase();
+        const who = targetFor(tx, p.DialBLegTo || p.To);
+        if (/connected|answer/.test(ev) && !meta.transferConnected) {
+          await setMeta(env, callId, { transferConnected: { id: who?.id, name: who?.name, at: Date.now() } });
+          ctx.waitUntil(crmEvent(env, { event: 'call.transfer', callId, status: 'CONNECTED', toUserId: who?.id, toName: who?.name }));
+        } else if (/hangup/.test(ev) && meta.transferConnected && who && who.id === meta.transferConnected.id) {
+          const durationSec = Number(p.DialBLegDuration || p.Duration || p.BillDuration) || Math.round((Date.now() - meta.transferConnected.at) / 1000);
+          ctx.waitUntil(crmEvent(env, { event: 'call.transfer', callId, status: 'ENDED', durationSec }));
+        }
+        return new Response('OK');
+      }
+
+      // Final Dial result: done, or ring the next person, or tell the caller nobody is free.
+      if (url.pathname === '/vobiz/transfer-result') {
+        const status = String(p.DialStatus || '').toLowerCase();
+        const i = Number(url.searchParams.get('i')) || 0;
+        if (status === 'completed' || meta.transferConnected) return xml('\n  <Hangup/>\n');
+        const next = i + 1;
+        if (tx.mode !== 'ALL' && next < tx.targets.length) {
+          ctx.waitUntil(crmEvent(env, { event: 'call.transfer', callId, status: 'RINGING', next: true, toUserId: tx.targets[next].id, toName: tx.targets[next].name, whisper: tx.whisperText }));
+          return new Response(dialXml(env, callId, tx, next, { record: false }), { headers: { 'Content-Type': 'application/xml' } });
+        }
+        ctx.waitUntil(crmEvent(env, { event: 'call.transfer', callId, status: 'NO_ANSWER', reason: status || 'no answer' }));
+        return sorryXml(env);
+      }
+
+      // Recording of the transferred conversation: keep it in R2, then transcribe and summarise it for the CRM.
+      if (url.pathname === '/vobiz/transfer-recording') {
+        const rec = { id: p.RecordingID || p.recording_id, url: p.RecordUrl || p.RecordFile || p.record_url, durationSec: Number(p.RecordingDuration || p.recording_duration) || undefined };
+        if (!rec.url) return xml('');
+        await setMeta(env, callId, { transferRecordingId: rec.id, transferRecordingUrl: rec.url });
+        ctx.waitUntil((async () => {
+          const key = await archiveRecording(env, callId, rec.url, 'transfer');
+          await crmEvent(env, { event: 'call.transfer.recording', callId, recording: { id: rec.id, durationSec: rec.durationSec } });
+          if (!meta.transferConnected) return; // nobody picked up: nothing to transcribe
+          try {
+            const obj = key ? await env.RECORDINGS.get(key) : null;
+            const audio = obj ? await obj.arrayBuffer() : await (await fetch(rec.url, { headers: vobizHeaders(env) })).arrayBuffer();
+            const out = await transcribeTransfer(env, audio, `Team member: ${meta.transferConnected.name || 'unknown'}. Customer: ${meta.leadName || meta.phone || 'unknown'}.`);
+            await crmEvent(env, { event: 'call.transfer.summary', callId, ...out });
+          } catch (err) { console.error('transfer transcript', callId, err.message); }
+        })());
+        return xml('');
+      }
     }
 
     // VoBiz recording callback: remember where the file is and tell the CRM it can be played.

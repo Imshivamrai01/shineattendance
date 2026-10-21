@@ -15,6 +15,9 @@ const S = new mongoose.Schema({
   placesKey: String,
   // What the AI calling agent knows about the company (services, timings, address, FAQs). Used on every AI call.
   aiCompanyInfo: { type: String, maxlength: 4000 },
+  // Live transfer from an AI call to a person: on/off, ring one by one or everyone at once, ring time, only people checked in today
+  aiTransferEnabled: { type: Boolean, default: true }, aiTransferMode: { type: String, enum: ['SEQUENTIAL', 'ALL'], default: 'SEQUENTIAL' },
+  aiTransferRingSec: { type: Number, default: 20 }, aiTransferNeedCheckIn: { type: Boolean, default: true },
   lastSheetSync: Date, lastMailError: String, mailEveryCheckin: { type: Boolean, default: false }, lastAbsentMailDate: String, lastMailErrorAt: Date, lastSheetError: String, lastSheetErrorAt: Date,
 }, { timestamps: true });
 export default mongoose.models.Setting || mongoose.model('Setting', S);

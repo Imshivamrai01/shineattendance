@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Buffer } from 'node:buffer';
+import { crmPost, ttsMp3, ensureSorry, keys, startVobizTransfer } from './transfer.js';
 
 /*
  * One live conversation. The browser streams 16 kHz PCM16 mic frames in; we relay them to Deepgram,
@@ -24,6 +25,10 @@ const LLM_TIMEOUT_MS = 15000;
 const BYTES_PER_MS_24K = 48; // 24 kHz * 2 bytes
 const PHONE_CHUNK = 1920;    // 40 ms of 24 kHz PCM16 per playAudio, small enough for quick barge-in
 
+const TRANSFER_TAG = '[[TRANSFER]]';
+const TRANSFER_RE = /\[\[\s*TRANSFER\s*\]\]/;
+const TRANSFER_RE_ALL = /\[\[\s*TRANSFER\s*\]\]/g;
+
 const istNow = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /** Who is on the line and why, so the agent never asks for what it already knows. */
@@ -34,6 +39,9 @@ function callContext(meta) {
     lines.push(`You called them${meta.leadName ? `: ${meta.leadName}` : ''} at ${meta.phone}.${meta.purpose ? ` Reason for the call: ${meta.purpose}.` : ''}`);
   } else lines.push(`They called you from ${meta.phone}.`);
   lines.push('You already have their phone number: never ask for it, just confirm it if they want a call on another number.');
+  lines.push(`Live transfer: if they ask to talk to a person (someone from the team, a manager, "kisi insaan se baat karao"), or you cannot help and they want someone,
+reply with one short sentence such as "Ji, main aapko hamari team se jod rahi hoon, yeh call record ho rahi hai, ek moment." and end that reply with ${TRANSFER_TAG}.
+Use ${TRANSFER_TAG} only in that case, never otherwise.`);
   return `
 ${lines.join(' ')}`;
 }
@@ -228,8 +236,10 @@ export class VoiceSession extends DurableObject {
       case 'text': return this.finalizeTurn(String(msg.text || '').slice(0, 1000));
       case 'playback_done':
         if (this.active && this.active.gen === msg.gen && this.active.llmDone && !this.active.queue.length && !this.utter) {
+          const done = this.active;
           this.active = null;
           this.state('listening');
+          if (done.transfer) this.ctx.waitUntil(this.startTransfer());
         }
         return;
       case 'heard': return this.trimInterrupted(msg.gen, Number(msg.ms) || 0);
@@ -322,7 +332,7 @@ export class VoiceSession extends DurableObject {
     const text = (typed ?? this.finalParts.join(' ')).trim();
     const lastWordEnd = this.lastWordEnd;
     this.resetTurn();
-    if (!text) return;
+    if (!text || this.transferring) return;
     if (this.active) this.bargeIn(text);
     const now = Date.now();
     this.send({ type: 'final', text, t: now });
@@ -395,6 +405,8 @@ export class VoiceSession extends DurableObject {
           if (firstToken) { firstToken = false; this.send({ type: 'diag', k: 'first_token_ms', v: Date.now() - turnAt, gen: r.gen }); }
           r.text += delta;
           buf += delta;
+          // The agent asks for a live transfer with a tag at the end of its reply: never speak it.
+          if (TRANSFER_RE.test(buf)) { r.transfer = true; buf = buf.replace(TRANSFER_RE_ALL, ' '); }
           this.send({ type: 'token', text: delta, gen: r.gen });
           // Speak each sentence as soon as it is complete.
           let m;
@@ -405,9 +417,11 @@ export class VoiceSession extends DurableObject {
         }
       }
       if (this.active !== r) return;
+      if (TRANSFER_RE.test(r.text)) r.transfer = true;
+      buf = buf.replace(/\[\[[^\]]*$/, ''); // a tag cut off at the end of the stream
       if (buf.trim()) this.enqueue(r, buf);
       r.llmDone = true;
-      this.history.push({ role: 'assistant', content: r.text.trim() });
+      this.history.push({ role: 'assistant', content: r.text.replace(TRANSFER_RE_ALL, '').trim() });
       r.historyIndex = this.history.length - 1;
       await this.saveHistory();
       if (!r.queue.length && !this.utter) this.finishAudio(r);
@@ -523,7 +537,11 @@ export class VoiceSession extends DurableObject {
 
   finishAudio(r) {
     this.send({ type: 'audio_end', gen: r.gen, audioMs: Math.round(r.audioMs) });
-    if (!r.firstAudio) { this.active = null; this.state('listening'); }
+    if (!r.firstAudio) {
+      this.active = null;
+      this.state('listening');
+      if (r.transfer) this.ctx.waitUntil(this.startTransfer());
+    }
   }
 
   // ---- barge-in ----
@@ -558,6 +576,66 @@ export class VoiceSession extends DurableObject {
     else this.history.splice(Math.min(it.at, this.history.length), 0, msg); // cut mid-stream: put it where it was spoken
     await this.saveHistory();
     this.send({ type: 'diag', k: 'heard_ms', v: Math.round(heardMs), gen });
+  }
+
+  // ---- live transfer to a person ----
+
+  /** One sentence the person hears before being connected: who is calling and what they want. */
+  async whisperText() {
+    const who = this.meta?.leadName || this.meta?.phone || 'ek caller';
+    const lastAsk = [...(this.history || [])].reverse().find((m) => m.role === 'user')?.content || '';
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST', headers: { Authorization: `Bearer ${this.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.env.GROQ_MODEL, temperature: 0.2, max_completion_tokens: 120, reasoning_effort: 'low', include_reasoning: false,
+          messages: [{ role: 'system', content: 'Write one short Hinglish sentence (Latin script) for a team member who is about to take this call from an AI agent: who is calling and what they want. No greeting, no markdown.' },
+            { role: 'user', content: `Caller: ${who}.\n${(this.history || []).slice(-10).map((m) => `${m.role === 'user' ? 'Caller' : 'Agent'}: ${m.content}`).join('\n')}` }] }),
+        signal: AbortSignal.timeout(4000),
+      });
+      const line = (await res.json()).choices?.[0]?.message?.content?.trim();
+      if (line) return `AI call se transfer. ${line}`;
+    } catch (err) { console.error('whisper summary', err.message); }
+    return `AI call se transfer. ${who}${lastAsk ? `: ${lastAsk.slice(0, 160)}` : ''}`;
+  }
+
+  /** The caller asked for a person: find who is free (CRM), prepare the whisper, and hand the call to VoBiz. */
+  async startTransfer() {
+    const callId = this.phone?.callId;
+    if (!callId || this.transferring) return;
+    this.transferring = true;
+    const answer = await crmPost(this.env, '/api/ai/transfer', { callId });
+    const targets = answer?.enabled ? answer.targets || [] : [];
+    const fallBack = async (reason, text) => {
+      // Stay on the line with the AI and take a callback instead.
+      this.transferring = false;
+      this.meta = { ...this.meta, transferUnavailable: reason };
+      await this.ctx.storage.put('meta', this.meta);
+      this.toCrm({ event: 'call.transfer', status: 'FAILED', reason });
+      await this.loadHistory();
+      this.history.push({ role: 'assistant', content: text });
+      await this.saveHistory();
+      this.speakFixed(text);
+    };
+    if (!targets.length) {
+      return fallBack(answer?.reason || (answer ? 'nobody available right now' : 'could not reach the CRM'),
+        'Maaf kijiye, abhi team mein koi free nahi hai. Main aapka callback note kar leti hoon. Aapko kab call karna theek rahega?');
+    }
+    const whisper = await this.whisperText();
+    try {
+      await this.env.RECORDINGS.put(keys.media(this.env, `${callId}-whisper`), await ttsMp3(this.env, whisper), { httpMetadata: { contentType: 'audio/mpeg' } });
+      await ensureSorry(this.env);
+    } catch (err) { console.error('transfer audio', err.message); }
+    const tx = { targets, mode: answer.mode, ringSec: answer.ringSec, whisperText: whisper, startedAt: Date.now() };
+    this.meta = { ...((await this.ctx.storage.get('meta')) || this.meta), transfer: tx };
+    await this.ctx.storage.put('meta', this.meta);
+    for (const x of answer.mode === 'ALL' ? targets : targets.slice(0, 1)) this.toCrm({ event: 'call.transfer', status: 'RINGING', toUserId: x.id, toName: x.name, whisper });
+    try {
+      await startVobizTransfer(this.env, callId);
+      console.log('transfer started', callId, targets.map((x) => x.name).join(', '));
+    } catch (err) {
+      console.error('transfer', err.message);
+      await fallBack('transfer could not start', 'Maaf kijiye, abhi connect nahi ho paya. Main aapka callback note kar leti hoon. Aapko kab call karna theek rahega?');
+    }
   }
 
   // ---- calls: recording, CRM report ----

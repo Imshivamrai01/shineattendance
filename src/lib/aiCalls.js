@@ -261,7 +261,7 @@ export async function queueStatus(ctx) {
 }
 
 /** Stream a call's recording from the voice worker (which holds the carrier credentials). */
-export const fetchRecording = (callId, range) => voiceFetch(`/api/recording?call=${encodeURIComponent(callId)}`, { headers: range ? { range } : {} });
+export const fetchRecording = (callId, range, part = '') => voiceFetch(`/api/recording?call=${encodeURIComponent(callId)}${part === 'transfer' ? '&part=transfer' : ''}`, { headers: range ? { range } : {} });
 
 const OUTCOME_TO_CALL = { CALLBACK: 'CALL_BACK', INTERESTED: 'CONNECTED', INFO_GIVEN: 'CONNECTED', NOT_INTERESTED: 'CONNECTED', OPT_OUT: 'CONNECTED', NO_CONVERSATION: 'NO_ANSWER', FAILED: 'NO_ANSWER' };
 const date = (v) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d : undefined; };

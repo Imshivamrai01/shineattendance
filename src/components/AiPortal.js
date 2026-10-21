@@ -55,14 +55,16 @@ export function AgentSetup({ canEdit = true, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  useEffect(() => { if (setup && !f) setF({ companyInfo: setup.companyInfo, scripts: setup.scripts.map((x) => ({ ...x })) }); }, [setup, f]);
+  const fromSetup = (x) => ({ companyInfo: x.companyInfo, scripts: x.scripts.map((y) => ({ ...y })), transfer: { ...x.transfer },
+    people: Object.fromEntries((x.people || []).map((u) => [u._id, u.aiTransfer])) });
+  useEffect(() => { if (setup && !f) setF(fromSetup(setup)); }, [setup, f]);
   if (!f) return <Skeleton title={false} rows={4} />;
   const setScript = (i, k, v) => setF({ ...f, scripts: f.scripts.map((x, j) => (j === i ? { ...x, [k]: v } : x)) });
   const save = async () => {
     setBusy(true); setErr(''); setMsg('');
     try {
       const r = await api('/ai/setup', { method: 'PUT', body: f });
-      setF({ companyInfo: r.companyInfo, scripts: r.scripts.map((x) => ({ ...x })) }); reload(); setMsg('Saved. The agent uses this from the next call.'); onSaved?.();
+      setF(fromSetup(r)); reload(); setMsg('Saved. The agent uses this from the next call.'); onSaved?.();
     } catch (e) { setErr(e.message); }
     setBusy(false);
   };
@@ -93,6 +95,34 @@ export function AgentSetup({ canEdit = true, onSaved }) {
           <label className="check"><input type="checkbox" disabled={!canEdit} checked={x.active !== false} onChange={(e) => setScript(i, 'active', e.target.checked)} /> Available to choose</label>
         </details>
       ))}
+      <h3 style={{ margin: '18px 0 8px' }}>Live transfer to a person</h3>
+      <p className="muted small" style={{ marginTop: 0 }}>When a caller asks to talk to someone, the agent rings a person below. They first hear a one-line summary, then talk to the caller. That conversation is recorded, transcribed and summarised on the call. If nobody picks up, the caller hears that the team will call back, and it becomes a callback.</p>
+      {f.transfer && (
+        <div className="form two">
+          <label className="check"><input type="checkbox" disabled={!canEdit} checked={f.transfer.enabled} onChange={(e) => setF({ ...f, transfer: { ...f.transfer, enabled: e.target.checked } })} /> Allow live transfer</label>
+          <label className="check"><input type="checkbox" disabled={!canEdit} checked={f.transfer.needCheckIn} onChange={(e) => setF({ ...f, transfer: { ...f.transfer, needCheckIn: e.target.checked } })} /> Only people checked in right now</label>
+          <Field label="How to ring">
+            <select disabled={!canEdit} value={f.transfer.mode} onChange={(e) => setF({ ...f, transfer: { ...f.transfer, mode: e.target.value } })}>
+              <option value="SEQUENTIAL">One by one (the lead&apos;s owner first)</option>
+              <option value="ALL">Everyone at once, first to pick up</option>
+            </select>
+          </Field>
+          <Field label="Ring each for (seconds)"><input type="number" min={10} max={45} disabled={!canEdit} value={f.transfer.ringSec} onChange={(e) => setF({ ...f, transfer: { ...f.transfer, ringSec: e.target.value } })} /></Field>
+        </div>
+      )}
+      {setup?.people && (
+        <div className="table-wrap" style={{ marginTop: 8 }}><table>
+          <thead><tr><th>Receives transfers</th><th>Person</th><th>Mobile</th></tr></thead>
+          <tbody>{setup.people.map((u) => (
+            <tr key={u._id} className={u.hasMobile ? '' : 'muted'}>
+              <td><input type="checkbox" aria-label={`${u.name} receives AI transfers`} disabled={!canEdit || !u.hasMobile} checked={!!f.people?.[u._id]}
+                onChange={(e) => setF({ ...f, people: { ...f.people, [u._id]: e.target.checked } })} /></td>
+              <td>{u.name} <span className="muted small">{u.role}</span></td>
+              <td className="small">{u.hasMobile ? u.mobile : 'No mobile number in profile'}</td>
+            </tr>))}
+          </tbody>
+        </table></div>
+      )}
       {err && <div className="alert">{err}</div>}
       {msg && <div className="alert ok">{msg}</div>}
       {canEdit && (
@@ -107,6 +137,43 @@ export function AgentSetup({ canEdit = true, onSaved }) {
 }
 
 const TypeTag = ({ c }) => (c.scriptName ? <div className="muted small">{c.scriptName}</div> : null);
+
+const TX_LABEL = { REQUESTED: ['Finding someone…', 'warn'], RINGING: ['Ringing the team…', 'warn'], CONNECTED: ['Talking to the team', 'ok'],
+  ENDED: ['Put through to the team', 'ok'], NO_ANSWER: ['Nobody picked up', 'bad'], FAILED: ['Could not put through', 'bad'] };
+export const TransferBadge = ({ t }) => {
+  if (!t?.status) return null;
+  const [label, tone] = TX_LABEL[t.status] || [t.status, ''];
+  return <Badge tone={tone}>{t.toName && ['CONNECTED', 'ENDED'].includes(t.status) ? `Put through to ${t.toName}` : label}</Badge>;
+};
+
+/** The part of the call after the caller was put through to a person. */
+function TransferPart({ c }) {
+  const t = c.transfer;
+  return (
+    <div className="card ai-transfer" style={{ margin: '12px 0' }}>
+      <div className="row between"><h3 style={{ margin: 0 }}>Live transfer</h3><TransferBadge t={t} /></div>
+      <dl className="ai-facts" style={{ marginTop: 10 }}>
+        {(t.to?.name || t.toName) && <><dt>Picked up by</dt><dd>{t.to?.name || t.toName}</dd></>}
+        {t.tried?.length > 0 && <><dt>Rang</dt><dd>{t.tried.join(', ')}</dd></>}
+        {t.answeredAt && <><dt>Connected</dt><dd>{fmtDateTime(t.answeredAt)}{t.durationSec ? ` · talked ${fmtDur(Math.round(t.durationSec))}` : ''}</dd></>}
+        {t.reason && <><dt>Why</dt><dd>{t.reason}</dd></>}
+      </dl>
+      {t.summary && <p style={{ marginTop: 0 }}>{t.summary}</p>}
+      <h4 className="small muted" style={{ margin: '10px 0 6px' }}>Recording (with the team)</h4>
+      {c.hasTransferRecording
+        ? <audio controls preload="none" src={`/api/sales/ai-calls/${c._id}/recording?part=transfer`} style={{ width: '100%' }}>Your browser cannot play this recording.</audio>
+        : <p className="muted small">{['CONNECTED', 'RINGING', 'REQUESTED'].includes(t.status) ? 'Arrives a minute after the call ends.' : t.status === 'ENDED' ? 'Not ready yet.' : 'No conversation with the team.'}</p>}
+      {t.transcript?.length > 0 && (
+        <>
+          <h4 className="small muted" style={{ margin: '10px 0 6px' }}>Transcript (with the team)</h4>
+          <ol className="ai-transcript">
+            {t.transcript.map((m, i) => <li key={i} className={m.role === 'customer' ? 'them' : 'agent'}><span className="muted small">{m.role === 'customer' ? 'Customer' : (t.to?.name || t.toName || 'Team')}</span>{m.content}</li>)}
+          </ol>
+        </>
+      )}
+    </div>
+  );
+}
 
 /** Full view of one AI call: summary, callback, recording player and transcript. */
 export function AiCallDetail({ id, onClose, onChanged }) {
@@ -157,7 +224,8 @@ export function AiCallDetail({ id, onClose, onChanged }) {
                   </div>}
             </div>
           )}
-          <h3 className="small muted" style={{ margin: '14px 0 6px' }}>Recording</h3>
+          {c.transfer?.status && <TransferPart c={c} />}
+          <h3 className="small muted" style={{ margin: '14px 0 6px' }}>{c.transfer?.status ? 'Recording (AI part)' : 'Recording'}</h3>
           {c.hasRecording
             ? <audio controls preload="none" src={`/api/sales/ai-calls/${c._id}/recording`} style={{ width: '100%' }}>Your browser cannot play this recording.</audio>
             : <p className="muted small">{c.status === 'COMPLETED' ? 'Not ready yet. It usually arrives a minute after the call.' : 'No recording for this call.'}</p>}
@@ -345,7 +413,7 @@ export function AiPortal({ d }) {
                     </td>
                     <td className="c-lead"><b>{who(c)}</b><div className="muted small">{c.phone}</div></td>
                     <td className="small" style={{ minWidth: 180 }}>{c.requirement || c.summary || <span className="muted">—</span>}</td>
-                    <td><AiOutcomeBadge c={c} /> <InterestBadge i={c.interest} /><TypeTag c={c} />{c.callbackRequested && c.handledAt && <div className="muted small">Done by {c.handledBy?.name}</div>}</td>
+                    <td><AiOutcomeBadge c={c} /> <InterestBadge i={c.interest} /> <TransferBadge t={c.transfer} /><TypeTag c={c} />{c.callbackRequested && c.handledAt && <div className="muted small">Done by {c.handledBy?.name}</div>}</td>
                     <td>{c.lead ? <><Link href={`/sales/leads/${c.lead._id}`} className="lead-name">{c.lead.name}</Link><div><StatusBadge s={c.lead.status} /></div></> : <span className="muted">—</span>}</td>
                     <td><button className="btn sm" onClick={() => setOpen(c._id)}>Open</button></td>
                   </tr>))}
