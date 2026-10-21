@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import Icon from './Icon';
 import Link from 'next/link';
 
 /** Shimmering placeholder used instead of "Loading…" text. */
@@ -53,7 +54,10 @@ export function Modal({ title, children, onClose }) {
   return createPortal(
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
-        <h2>{title}</h2>
+        <div className="modal-head">
+          <h2>{title}</h2>
+          <button type="button" className="modal-x" onClick={onClose} aria-label="Close" title="Close"><Icon name="x" size={20} /></button>
+        </div>
         {children}
       </div>
     </div>,

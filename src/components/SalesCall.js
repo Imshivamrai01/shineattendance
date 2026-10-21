@@ -42,12 +42,21 @@ function OutcomeModal({ call, me, onClose, onSaved, onRedial }) {
     setBusy(true); setErr('');
     try {
       if (!call.activityId) throw new Error('The call is still being recorded, try again in a second');
-      await api(`/sales/leads/${call.lead._id}/call`, { method: 'PATCH', body: {
+      const send = () => api(`/sales/leads/${call.lead._id}/call`, { method: 'PATCH', body: {
         activityId: call.activityId, outcome: f.outcome, note: f.note, status: f.status || undefined,
         followUpAt: f.followUpAt ? new Date(f.followUpAt).toISOString() : undefined, durationSec: away ?? undefined,
       } });
+      // Coming back from the phone app the connection can still be waking up: one quiet retry on a network error.
+      try { await send(); } catch (e) {
+        if (e.status) throw e;
+        await new Promise((r) => setTimeout(r, 1500));
+        await send();
+      }
       onSaved();
-    } catch (e) { setErr(e.message); setBusy(false); }
+    } catch (e) {
+      setErr(e.status ? e.message : 'Could not reach the server (internet connection). Your answers are still here: press Save call again.');
+      setBusy(false);
+    }
   };
   return (
     <Modal title="How did the call go?" onClose={onClose}>
@@ -82,7 +91,7 @@ function OutcomeModal({ call, me, onClose, onSaved, onRedial }) {
         </Field>
       </div>
       {err && <div className="alert" style={{ marginTop: 10 }}>{err}</div>}
-      <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
+      <div className="row modal-actions">
         <button type="button" className="btn" onClick={onClose} disabled={busy}>Fill in later</button>
         <button type="button" className="btn primary" onClick={submit} disabled={busy || !f.outcome}>{busy ? 'Saving…' : 'Save call'}</button>
       </div>
