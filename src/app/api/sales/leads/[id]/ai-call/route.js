@@ -8,7 +8,7 @@ export const POST = salesHandler(async (ctx) => {
   const lead = await M.Lead.findById(oid(ctx.params.id, 'lead'));
   if (!lead || !(await canSeeLead(ctx, lead))) throw notFound('Lead not found');
   const b = await readJson(ctx.req).catch(() => ({}));
-  const call = await startAiCall(ctx, lead, { purpose: String(b.purpose || '').trim() });
-  await logActivity(lead, ctx.user, { type: 'NOTE', note: `Started an AI call to ${call.phone}${call.purpose ? ` (${call.purpose})` : ''}` });
+  const call = await startAiCall(ctx, lead, { purpose: String(b.purpose || '').trim(), scriptId: b.scriptId });
+  await logActivity(lead, ctx.user, { type: 'NOTE', note: `Started an AI call (${call.scriptName || 'Sales'}) to ${call.phone}${call.purpose ? `: ${call.purpose}` : ''}` });
   return { ok: true, call: call.toObject() };
 });

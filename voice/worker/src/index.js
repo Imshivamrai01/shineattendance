@@ -34,7 +34,10 @@ async function crmEvent(env, payload) {
 
 // ---- CRM -> worker (Bearer CRM_WEBHOOK_SECRET) ----
 
-/** Dial an Indian mobile for the CRM. Body: { to: "+91XXXXXXXXXX", lead: { id, name, purpose }, requestedBy }. */
+/**
+ * Dial an Indian mobile for the CRM. Body: { to: "+91XXXXXXXXXX", lead: { id?, name, purpose }, requestedBy,
+ * company (what the agent knows about the company), script: { name, kind, opening, instructions, collect } }.
+ */
 async function dial(req, env, ctx) {
   const b = await req.json().catch(() => ({}));
   const to = String(b.to || '');
@@ -55,16 +58,74 @@ async function dial(req, env, ctx) {
   const callId = out.request_uuid;
   await setMeta(env, callId, {
     callId, direction: 'outbound', phone: to, leadId: b.lead?.id, leadName: String(b.lead?.name || '').slice(0, 120),
-    purpose: String(b.lead?.purpose || '').slice(0, 300), requestedBy: b.requestedBy,
+    purpose: String(b.lead?.purpose || '').slice(0, 300), requestedBy: b.requestedBy, company: String(b.company || '').slice(0, 4000),
+    script: b.script && {
+      name: String(b.script.name || '').slice(0, 60), kind: String(b.script.kind || ''), opening: String(b.script.opening || '').slice(0, 300),
+      instructions: String(b.script.instructions || '').slice(0, 3000), collect: String(b.script.collect || '').slice(0, 600),
+    },
   });
   return Response.json({ callId });
 }
 
-/** Stream a call's recording to the CRM (which checks who may listen). VoBiz credentials stay here. */
+// ---- Recordings: VoBiz deletes them after 30 days, so each one is copied into our own R2 bucket ----
+
+const recKey = (env, callId) => `${env.RECORDINGS_PREFIX || 'calls'}/${callId}.mp3`;
+
+/** Copy one recording from VoBiz into R2 (retries while VoBiz is still finalising the file). Returns the R2 key or null. */
+async function archiveRecording(env, callId, url) {
+  if (!env.RECORDINGS || !url) return null;
+  const key = recKey(env, callId);
+  if (await env.RECORDINGS.head(key)) return key;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const res = await fetch(url, { headers: vobizHeaders(env) });
+      if (res.ok) {
+        const body = await res.arrayBuffer();
+        if (body.byteLength > 0) {
+          await env.RECORDINGS.put(key, body, {
+            httpMetadata: { contentType: res.headers.get('content-type') || 'audio/mpeg' },
+            customMetadata: { callId, source: 'vobiz', copiedAt: new Date().toISOString() },
+          });
+          await setMeta(env, callId, { recordingKey: key });
+          console.log('recording archived', key, body.byteLength);
+          return key;
+        }
+      } else console.error('recording fetch', callId, res.status);
+    } catch (err) { console.error('recording fetch', callId, err.message); }
+    await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
+  }
+  return null;
+}
+
+/** "bytes=a-b" / "bytes=a-" / "bytes=-n" -> R2 range option, or undefined. */
+function r2Range(header) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header || '');
+  if (!m || (!m[1] && !m[2])) return undefined;
+  if (!m[1]) return { suffix: Number(m[2]) };
+  return m[2] ? { offset: Number(m[1]), length: Number(m[2]) - Number(m[1]) + 1 } : { offset: Number(m[1]) };
+}
+
+/** Stream a call's recording to the CRM (which checks who may listen): from R2 when copied, else from VoBiz. */
 async function recording(req, env, url) {
   const sid = url.searchParams.get('call') || '';
   if (!SID.test(sid)) return new Response('Bad call id', { status: 400 });
   const meta = await getMeta(env, sid);
+  if (env.RECORDINGS) {
+    const range = r2Range(req.headers.get('range'));
+    const obj = await env.RECORDINGS.get(meta.recordingKey || recKey(env, sid), range ? { range } : {});
+    if (obj) {
+      const headers = new Headers({ 'content-type': obj.httpMetadata?.contentType || 'audio/mpeg', 'accept-ranges': 'bytes', etag: obj.httpEtag });
+      if (range && obj.range) {
+        const start = obj.range.offset ?? obj.size - obj.range.suffix;
+        const len = obj.range.length ?? obj.size - start;
+        headers.set('content-range', `bytes ${start}-${start + len - 1}/${obj.size}`);
+        headers.set('content-length', String(len));
+        return new Response(obj.body, { status: 206, headers });
+      }
+      headers.set('content-length', String(obj.size));
+      return new Response(obj.body, { headers });
+    }
+  }
   if (!meta.recordingUrl) return new Response('No recording', { status: 404 });
   const headers = { ...vobizHeaders(env) };
   if (req.headers.get('range')) headers.range = req.headers.get('range');
@@ -80,10 +141,16 @@ export default {
       return Response.json({ ok: true, model: env.GROQ_MODEL, tts: env.RUMIK_MODEL });
     }
 
-    if (url.pathname === '/api/call' || url.pathname === '/api/recording') {
+    if (url.pathname === '/api/call' || url.pathname === '/api/recording' || url.pathname === '/api/recording/archive') {
       const bearer = (req.headers.get('authorization') || '').replace(/^Bearer /, '');
       if (!sameToken(bearer, env.CRM_WEBHOOK_SECRET || '')) return new Response('Forbidden', { status: 403 });
       if (url.pathname === '/api/call' && req.method === 'POST') return dial(req, env, ctx);
+      if (url.pathname === '/api/recording/archive' && req.method === 'POST') {
+        const sid = url.searchParams.get('call') || '';
+        if (!SID.test(sid)) return new Response('Bad call id', { status: 400 });
+        const meta = await getMeta(env, sid);
+        return Response.json({ key: await archiveRecording(env, sid, meta.recordingUrl) });
+      }
       if (url.pathname === '/api/recording') return recording(req, env, url);
       return new Response('Method not allowed', { status: 405 });
     }
@@ -129,6 +196,7 @@ export default {
       const rec = { id: p.recording_id || p.RecordingID, url: p.record_url || p.RecordUrl, durationSec: Number(p.recording_duration || p.RecordingDuration) || undefined };
       await setMeta(env, callId, { recordingId: rec.id, recordingUrl: rec.url, recordingDurationSec: rec.durationSec });
       ctx.waitUntil(crmEvent(env, { event: 'call.recording', callId, recording: rec }));
+      ctx.waitUntil(archiveRecording(env, callId, rec.url));
       return new Response('OK');
     }
 

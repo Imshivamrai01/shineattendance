@@ -38,8 +38,17 @@ function callContext(meta) {
 ${lines.join(' ')}`;
 }
 
-const systemPrompt = (env, meta) => `You are the receptionist and lead qualifier for ${env.BUSINESS_NAME}, speaking on a live voice call.
-What you know about the business: ${env.BUSINESS_INFO || 'only its name. You do not know its services, prices or offers, so do not describe any. Ask what they need and offer a call back from the team.'}
+/** The call type chosen in the CRM (Sales, Interview invite, Feedback...): replaces the default receptionist goal. */
+function scriptBlock(meta) {
+  const sc = meta?.script;
+  if (!sc) return '';
+  return `
+This call: ${sc.name}.${sc.instructions ? ` How to handle it: ${sc.instructions}` : ''}${sc.collect ? ` Find out: ${sc.collect}` : ''}
+Follow these call instructions over the general goal below whenever they differ.`;
+}
+
+const systemPrompt = (env, meta) => `You are a phone agent for ${env.BUSINESS_NAME}, speaking on a live voice call.
+What you know about the company: ${meta?.company || env.BUSINESS_INFO || 'only its name. You do not know its services, prices or offers, so do not describe any. Ask what they need and offer a call back from the team.'}${scriptBlock(meta)}
 Style: warm Indian-English / Hinglish, short spoken sentences, natural contractions. Never use markdown, emoji, bullet points or long lists.
 Language: mirror the caller. English in English; Hindi or Hinglish in Hinglish written in Latin script.
 You are a woman: in Hindi use feminine forms ("main bata deti hoon", "kar sakti hoon").
@@ -51,6 +60,11 @@ If you were interrupted, the caller only heard part of your last reply: respond 
 Keep each reply to one to three short sentences.${callContext(meta)}`;
 
 function greeting(env, meta) {
+  const first = meta?.leadName ? meta.leadName.split(/\s+/)[0] : '';
+  if (meta?.script?.opening) {
+    // {name} / {company} placeholders from the call type; drop "{name} ji" cleanly when there is no name.
+    return meta.script.opening.replace(/\s*\{name\}(\s+ji)?/g, first ? ` ${first}$1` : '').replace(/\{company\}/g, env.BUSINESS_NAME).trim();
+  }
   if (meta?.direction === 'outbound') {
     const who = meta.leadName ? ` ${meta.leadName.split(/\s+/)[0]} ji` : '';
     return `Namaste${who}! Main ${env.BUSINESS_NAME} se bol rahi hoon. Kya aapke paas do minute hain?`;
@@ -59,7 +73,7 @@ function greeting(env, meta) {
 }
 const GREETING_GUARD_MS = 1500; // a "Hello?" while picking up must not cut the greeting
 
-const EXTRACT_PROMPT = `You read the transcript of a sales/reception phone call handled by an AI agent and fill in a JSON object for the CRM.
+const EXTRACT_PROMPT = `You read the transcript of a phone call handled by an AI agent (sales, reception, interview invite or feedback) and fill in a JSON object for the CRM.
 Return only JSON with exactly these keys:
 {"summary": one or two plain sentences in English,
  "name": caller's name or "",
@@ -70,7 +84,11 @@ Return only JSON with exactly these keys:
  "callbackRequested": true if they asked or agreed to be called back / a demo / a specialist call,
  "callbackAt": ISO 8601 with +05:30 offset for the agreed time, or "" if no time was agreed,
  "callbackNote": short note for the sales person or "",
- "optOut": true only if they asked not to be called again}
+ "optOut": true only if they asked not to be called again,
+ "accepted": for an interview invite or meeting: true if they agreed to come, false if they declined, null otherwise,
+ "appointmentAt": ISO 8601 with +05:30 offset for the agreed interview / meeting time, or "",
+ "rating": for a feedback call: their rating 1-5 as a number, or null,
+ "feedback": for a feedback call: what they liked or want improved, short, or ""}
 Use the caller's words only; do not guess a time they did not say. "NO_CONVERSATION" when the caller said nothing meaningful.`;
 
 export class VoiceSession extends DurableObject {
@@ -589,7 +607,7 @@ export class VoiceSession extends DurableObject {
       headers: { Authorization: `Bearer ${this.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: this.env.GROQ_MODEL, temperature: 0, reasoning_effort: 'low', include_reasoning: false, response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: EXTRACT_PROMPT }, { role: 'user', content: `Call time: ${this.meta?.startedAt || ''} (now ${istNow()} India).\n\n${lines}` }],
+        messages: [{ role: 'system', content: EXTRACT_PROMPT }, { role: 'user', content: `Call type: ${this.meta?.script?.name || 'Sales / reception'}${this.meta?.script?.collect ? ` (to find out: ${this.meta.script.collect})` : ''}. Call time: ${this.meta?.startedAt || ''} (now ${istNow()} India).\n\n${lines}` }],
       }),
       signal: AbortSignal.timeout(30000),
     });

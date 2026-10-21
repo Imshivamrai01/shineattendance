@@ -140,9 +140,9 @@ export const upsertTask = (settings, row) => post(settings, { action: 'upsert', 
 export const replaceTasks = (settings, rows) => post(settings, { action: 'replace', tab: TASK_TAB, header: TASK_HEADER, rows });
 
 // ---- AI Calls tab: one row per call handled by the AI voice agent, keyed by the carrier call id ----
-export const AI_TAB = 'AI Calls';
-export const AI_HEADER = ['Key', 'Date', 'Time', 'Direction', 'Phone', 'Name', 'Company', 'Requirement', 'Outcome', 'Interest', 'Callback at', 'Callback handled',
-  'Summary', 'Duration (s)', 'Recording', 'Lead', 'Status', 'Updated'];
+export const AI_TAB = 'AI Call Log';
+export const AI_HEADER = ['Key', 'Date', 'Time', 'Call type', 'Direction', 'Phone', 'Name', 'Company', 'Requirement', 'Outcome', 'Interest', 'Callback at', 'Callback handled',
+  'Accepted', 'Appointment', 'Rating', 'Feedback', 'Summary', 'Duration (s)', 'Recording', 'Lead', 'Status', 'Updated'];
 const istDate = (d) => (d ? new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '');
 
 /** `c` = AiCall with `lead` populated ({ name }). Links point into the CRM, never at the carrier's recording URL. */
@@ -150,9 +150,10 @@ export function aiCallRow(c, appUrl) {
   const at = c.startedAt || c.createdAt;
   const base = String(appUrl || '').replace(/\/$/, '');
   return [
-    c.callId, istDate(at), ist(at), c.direction || '', c.phone || '', c.callerName || '', c.company || '', c.requirement || '', c.outcome || c.status || '',
+    c.callId, istDate(at), ist(at), c.scriptName || '', c.direction || '', c.phone || '', c.callerName || c.contactName || '', c.company || '', c.requirement || '', c.outcome || c.status || '',
     c.interest || '', c.callbackRequested ? (c.callbackAt ? new Date(c.callbackAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Yes (no time given)') : '',
-    c.callbackRequested ? (c.handledAt ? 'Yes' : 'No') : '', c.summary || '', c.durationSec ?? '',
+    c.callbackRequested ? (c.handledAt ? 'Yes' : 'No') : '', c.accepted == null ? '' : c.accepted ? 'Yes' : 'No',
+    c.appointmentAt ? new Date(c.appointmentAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '', c.rating ?? '', c.feedback || '', c.summary || '', c.durationSec ?? '',
     c.recordingId && base ? `${base}/sales?tab=ai&call=${c._id}` : '', c.lead?._id && base ? `${base}/sales/leads/${c.lead._id}` : (c.lead?.name || ''), c.status || '', new Date().toISOString(),
   ];
 }

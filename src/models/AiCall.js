@@ -14,6 +14,9 @@ const S = new Schema({
   phone: String, // the other party, E.164
   phoneKey: { type: String, index: true },
   lead: { type: Schema.Types.ObjectId, ref: 'Lead', index: true },
+  contactName: { type: String, maxlength: 120 }, // for calls to people who are not sales leads (CRM page: candidates, customers)
+  script: { type: Schema.Types.ObjectId, ref: 'AiScript' }, scriptName: String,
+  kind: { type: String, enum: ['SALES', 'INTERVIEW', 'FEEDBACK', 'OTHER'], default: 'SALES', index: true },
   requestedBy: { type: Schema.Types.ObjectId, ref: 'User' }, // who pressed "AI call" (outbound from the CRM)
   purpose: { type: String, maxlength: 300 },
   startedAt: Date, endedAt: Date, durationSec: Number,
@@ -27,6 +30,8 @@ const S = new Schema({
   callbackRequested: { type: Boolean, default: false, index: true },
   callbackAt: Date, callbackNote: String,
   optOut: { type: Boolean, default: false },
+  // Interview invites / meetings: did they accept, and for when. Feedback calls: rating 1-5 and what they said.
+  accepted: Boolean, appointmentAt: Date, rating: Number, feedback: { type: String, maxlength: 1000 },
   // Recording stays at VoBiz; the CRM streams it through its own access check (never hands out the VoBiz URL)
   recordingId: String, recordingUrl: String, recordingDurationSec: Number,
   // A sales person picked up the callback

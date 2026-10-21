@@ -22,7 +22,91 @@ const INTEREST = { HOT: 'grade-hot', WARM: 'grade-warm', COLD: 'grade-cold', NOT
 const InterestBadge = ({ i }) => (i ? <span className={`badge ${INTEREST[i]}`}>{i === 'NOT_INTERESTED' ? 'Not interested' : i[0] + i.slice(1).toLowerCase()}</span> : null);
 const todayIst = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
-const who = (c) => c.callerName || c.company || c.lead?.name || c.phone || 'Unknown caller';
+const who = (c) => c.callerName || c.contactName || c.company || c.lead?.name || c.phone || 'Unknown caller';
+
+const KINDS = [['SALES', 'Sales (creates / updates sales leads)'], ['INTERVIEW', 'Interview invite'], ['FEEDBACK', 'Feedback'], ['OTHER', 'Other']];
+
+/** Call types (Sales, Interview invite, Feedback...) and company info for the agent. */
+export function useAgentSetup() {
+  const [setup, setSetup] = useState(null);
+  const load = useCallback(() => api('/ai/setup').then(setSetup).catch(() => setSetup({ companyInfo: '', scripts: [] })), []);
+  useEffect(() => { load(); }, [load]);
+  return [setup, load];
+}
+
+/** Call type dropdown. `kinds` limits the choices (e.g. no Sales on the CRM page). */
+export function ScriptSelect({ scripts, value, onChange, kinds }) {
+  const list = (scripts || []).filter((x) => x.active !== false && (!kinds || kinds.includes(x.kind)));
+  useEffect(() => { if (!value && list[0]) onChange(list[0]._id); }, [value, list, onChange]);
+  return (
+    <Field label="Call type" hint="What the agent says on this call. Edit it under Agent setup.">
+      <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+        {!list.length && <option value="">Loading…</option>}
+        {list.map((x) => <option key={x._id} value={x._id}>{x.name}</option>)}
+      </select>
+    </Field>
+  );
+}
+
+/** Agent setup: company info + call types, in plain words. Managers can edit; others read. */
+export function AgentSetup({ canEdit = true, onSaved }) {
+  const [setup, reload] = useAgentSetup();
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  useEffect(() => { if (setup && !f) setF({ companyInfo: setup.companyInfo, scripts: setup.scripts.map((x) => ({ ...x })) }); }, [setup, f]);
+  if (!f) return <Skeleton title={false} rows={4} />;
+  const setScript = (i, k, v) => setF({ ...f, scripts: f.scripts.map((x, j) => (j === i ? { ...x, [k]: v } : x)) });
+  const save = async () => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const r = await api('/ai/setup', { method: 'PUT', body: f });
+      setF({ companyInfo: r.companyInfo, scripts: r.scripts.map((x) => ({ ...x })) }); reload(); setMsg('Saved. The agent uses this from the next call.'); onSaved?.();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  return (
+    <div className="ai-setup">
+      <Field label="About the company" hint="Services, prices you are happy to share, timings, address, website, answers to common questions. The agent only says what is written here.">
+        <textarea rows={7} maxLength={4000} disabled={!canEdit} value={f.companyInfo} onChange={(e) => setF({ ...f, companyInfo: e.target.value })}
+          placeholder={'Shine Infosolutions, Noida. We build websites, mobile apps and CRM software for schools, hotels and small businesses.\nWebsites start at ₹15,000. Office hours 10 am to 6 pm, Monday to Saturday.\nAddress: ...'} />
+      </Field>
+      <h3 style={{ margin: '18px 0 8px' }}>Call types</h3>
+      <p className="muted small" style={{ marginTop: 0 }}>Choose one of these when you start AI calls. Write like you would brief a new team member.</p>
+      {f.scripts.map((x, i) => (
+        <details key={x._id || `new-${i}`} className="card ai-script" open={!x._id}>
+          <summary><b>{x.name || 'New call type'}</b> <span className="muted small">· {KINDS.find(([k]) => k === x.kind)?.[1] || x.kind}{x.active === false ? ' · switched off' : ''}</span></summary>
+          <div className="form two" style={{ marginTop: 12 }}>
+            <Field label="Name"><input value={x.name} maxLength={60} disabled={!canEdit} onChange={(e) => setScript(i, 'name', e.target.value)} /></Field>
+            <Field label="Kind"><select value={x.kind} disabled={!canEdit} onChange={(e) => setScript(i, 'kind', e.target.value)}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+          </div>
+          <Field label="First sentence" hint="{name} = their first name, {company} = company name">
+            <input value={x.opening || ''} maxLength={300} disabled={!canEdit} onChange={(e) => setScript(i, 'opening', e.target.value)} />
+          </Field>
+          <Field label="What to say / how to pitch">
+            <textarea rows={4} maxLength={3000} disabled={!canEdit} value={x.instructions || ''} onChange={(e) => setScript(i, 'instructions', e.target.value)} />
+          </Field>
+          <Field label="What to find out">
+            <textarea rows={2} maxLength={600} disabled={!canEdit} value={x.collect || ''} onChange={(e) => setScript(i, 'collect', e.target.value)} />
+          </Field>
+          <label className="check"><input type="checkbox" disabled={!canEdit} checked={x.active !== false} onChange={(e) => setScript(i, 'active', e.target.checked)} /> Available to choose</label>
+        </details>
+      ))}
+      {err && <div className="alert">{err}</div>}
+      {msg && <div className="alert ok">{msg}</div>}
+      {canEdit && (
+        <div className="row" style={{ justifyContent: 'space-between', marginTop: 12 }}>
+          <button className="btn" onClick={() => setF({ ...f, scripts: [...f.scripts, { name: '', kind: 'OTHER', opening: 'Namaste {name} ji! Main {company} se bol rahi hoon.', instructions: '', collect: '', active: true }] })}>Add call type</button>
+          <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      )}
+      {!canEdit && <p className="muted small">Only sales managers can change this.</p>}
+    </div>
+  );
+}
+
+const TypeTag = ({ c }) => (c.scriptName ? <div className="muted small">{c.scriptName}</div> : null);
 
 /** Full view of one AI call: summary, callback, recording player and transcript. */
 export function AiCallDetail({ id, onClose, onChanged }) {
@@ -47,7 +131,13 @@ export function AiCallDetail({ id, onClose, onChanged }) {
           </div>
           {c.summary && <p style={{ marginTop: 0 }}>{c.summary}</p>}
           <dl className="ai-facts">
+            {c.scriptName && <><dt>Call type</dt><dd>{c.scriptName}</dd></>}
             <dt>Phone</dt><dd>{c.phone || '—'}</dd>
+            {c.contactName && <><dt>Called</dt><dd>{c.contactName}</dd></>}
+            {c.accepted != null && <><dt>Accepted</dt><dd><Badge tone={c.accepted ? 'ok' : 'bad'}>{c.accepted ? 'Yes' : 'No'}</Badge>{c.appointmentAt ? ` · ${fmtDateTime(c.appointmentAt)}` : ''}</dd></>}
+            {c.accepted == null && c.appointmentAt && <><dt>Time agreed</dt><dd>{fmtDateTime(c.appointmentAt)}</dd></>}
+            {c.rating != null && <><dt>Rating</dt><dd>{c.rating} / 5</dd></>}
+            {c.feedback && <><dt>Feedback</dt><dd>{c.feedback}</dd></>}
             {c.callerName && <><dt>Name</dt><dd>{c.callerName}</dd></>}
             {c.company && <><dt>Company</dt><dd>{c.company}</dd></>}
             {c.requirement && <><dt>Needs</dt><dd>{c.requirement}</dd></>}
@@ -84,7 +174,7 @@ export function AiCallDetail({ id, onClose, onChanged }) {
   );
 }
 
-const VIEWS = [['call', 'Call leads'], ['interested', 'Interested'], ['callbacks', 'Callbacks to do'], ['all', 'All AI calls']];
+const VIEWS = [['call', 'Call leads'], ['interested', 'Interested'], ['callbacks', 'Callbacks to do'], ['all', 'All AI calls'], ['setup', 'Agent setup']];
 const STATUS_OPTIONS = [['', 'Open leads'], ['NEW', 'New'], ['CONTACTED', 'Contacted'], ['FOLLOW_UP', 'Follow-up'], ['INTERESTED', 'Interested']];
 
 /** Who the agent is calling now and who is next, with a Stop button. */
@@ -112,6 +202,8 @@ function QueuePanel({ queue, onChanged }) {
 
 /** Pick leads and hand them to the AI agent. */
 function CallLeads({ d, onQueued }) {
+  const [setup] = useAgentSetup();
+  const [scriptId, setScriptId] = useState('');
   const [f, setF] = useState({ q: '', status: '', grade: '', category: '', called: '' });
   const [res, setRes] = useState(null);
   const [err, setErr] = useState('');
@@ -132,7 +224,7 @@ function CallLeads({ d, onQueued }) {
   const go = async () => {
     setBusy(true); setErr('');
     try {
-      const r = await api('/sales/ai-calls/queue', { method: 'POST', body: { leadIds: ids, purpose } });
+      const r = await api('/sales/ai-calls/queue', { method: 'POST', body: { leadIds: ids, purpose, scriptId } });
       setDone(r); setSel({}); setAsking(false); onQueued();
     } catch (e) { setErr(e.message); }
     setBusy(false);
@@ -174,7 +266,8 @@ function CallLeads({ d, onQueued }) {
         </table></div>
       )}
       {res && res.total > rows.length && <p className="muted small">Showing the top {rows.length} of {res.total} by lead quality. Narrow the filters to see others.</p>}
-      <div className="row" style={{ marginTop: 12, position: 'sticky', bottom: 8 }}>
+      <div className="row" style={{ marginTop: 12, position: 'sticky', bottom: 8, alignItems: 'flex-end' }}>
+        <div style={{ minWidth: 200 }}><ScriptSelect scripts={setup?.scripts} value={scriptId} onChange={setScriptId} /></div>
         <input aria-label="Reason for the call" placeholder="Reason for the call (optional, the agent uses it)" value={purpose} maxLength={300} onChange={(e) => setPurpose(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
         <button className="btn primary" disabled={!ids.length} onClick={() => setAsking(true)}>Call {ids.length || ''} with AI</button>
       </div>
@@ -182,7 +275,7 @@ function CallLeads({ d, onQueued }) {
         <Modal title={`Let the AI agent call ${ids.length} lead${ids.length === 1 ? '' : 's'}?`} onClose={() => !busy && setAsking(false)}>
           <p style={{ marginTop: 0 }}>The agent calls them <b>one after another</b>, only between 9:00 am and 8:30 pm, and records every call. You can stop the list at any time.</p>
           <p className="muted small">Each call usually takes 1–3 minutes, so {ids.length} lead{ids.length === 1 ? '' : 's'} take roughly {Math.max(1, Math.round(ids.length * 2))} minutes. Phone charges apply per minute. Leads that asked not to be called, or are closed, are skipped.</p>
-          {purpose && <p className="small">Reason given to the agent: <b>{purpose}</b></p>}
+          <p className="small">Call type: <b>{setup?.scripts.find((x) => x._id === scriptId)?.name || 'Sales'}</b>{purpose ? <> · Reason given to the agent: <b>{purpose}</b></> : null}</p>
           {err && <div className="alert">{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" disabled={busy} onClick={() => setAsking(false)}>Cancel</button>
@@ -231,14 +324,14 @@ export function AiPortal({ d }) {
                 {label}{k === 'callbacks' && res?.openCallbacks ? ` (${res.openCallbacks})` : ''}
               </button>))}
           </div>
-          {view !== 'call' && (
+          {!['call', 'setup'].includes(view) && (
             <div className="row">
               {view === 'all' && <input type="date" aria-label="Day" value={day} max={todayIst()} onChange={(e) => setDay(e.target.value)} style={{ width: 'auto' }} />}
               <input type="search" aria-label="Search AI calls" placeholder="Name, number, need…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 200 }} />
             </div>
           )}
         </div>
-        {view === 'call' ? <CallLeads d={d} onQueued={load} /> : (
+        {view === 'setup' ? <AgentSetup canEdit={d?.role === 'MANAGER'} /> : view === 'call' ? <CallLeads d={d} onQueued={load} /> : (
           <>
             {err && <div className="alert">{err}</div>}
             {!res ? <Skeleton title={false} /> : !res.calls.length ? <Empty message={empty} /> : (
@@ -252,7 +345,7 @@ export function AiPortal({ d }) {
                     </td>
                     <td className="c-lead"><b>{who(c)}</b><div className="muted small">{c.phone}</div></td>
                     <td className="small" style={{ minWidth: 180 }}>{c.requirement || c.summary || <span className="muted">—</span>}</td>
-                    <td><AiOutcomeBadge c={c} /> <InterestBadge i={c.interest} />{c.callbackRequested && c.handledAt && <div className="muted small">Done by {c.handledBy?.name}</div>}</td>
+                    <td><AiOutcomeBadge c={c} /> <InterestBadge i={c.interest} /><TypeTag c={c} />{c.callbackRequested && c.handledAt && <div className="muted small">Done by {c.handledBy?.name}</div>}</td>
                     <td>{c.lead ? <><Link href={`/sales/leads/${c.lead._id}`} className="lead-name">{c.lead.name}</Link><div><StatusBadge s={c.lead.status} /></div></> : <span className="muted">—</span>}</td>
                     <td><button className="btn sm" onClick={() => setOpen(c._id)}>Open</button></td>
                   </tr>))}
@@ -269,6 +362,8 @@ export function AiPortal({ d }) {
 
 /** "AI call" on a lead: the agent rings the lead now, after a confirmation that shows the number. */
 export function AiCallButton({ lead, onStarted }) {
+  const [setup] = useAgentSetup();
+  const [scriptId, setScriptId] = useState('');
   const [asking, setAsking] = useState(false);
   const [purpose, setPurpose] = useState('');
   const [busy, setBusy] = useState(false);
@@ -276,7 +371,7 @@ export function AiCallButton({ lead, onStarted }) {
   if (!lead.phone) return null;
   const go = async () => {
     setBusy(true); setErr('');
-    try { await api(`/sales/leads/${lead._id}/ai-call`, { method: 'POST', body: { purpose } }); setAsking(false); onStarted?.(); } catch (e) { setErr(e.message); }
+    try { await api(`/sales/leads/${lead._id}/ai-call`, { method: 'POST', body: { purpose, scriptId } }); setAsking(false); onStarted?.(); } catch (e) { setErr(e.message); }
     setBusy(false);
   };
   return (
@@ -285,6 +380,7 @@ export function AiCallButton({ lead, onStarted }) {
       {asking && (
         <Modal title="Let the AI agent call?" onClose={() => !busy && setAsking(false)}>
           <p style={{ marginTop: 0 }}>The AI agent will call <b>{lead.name}</b> on <b>{lead.phone}</b> now. The call is recorded, and the summary, transcript and any callback request appear here and in the AI Portal.</p>
+          <ScriptSelect scripts={setup?.scripts} value={scriptId} onChange={setScriptId} />
           <Field label="Reason for the call (optional, the agent uses it)"><input value={purpose} maxLength={300} onChange={(e) => setPurpose(e.target.value)} placeholder="e.g. follow up on the website enquiry" /></Field>
           {err && <div className="alert">{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -293,6 +389,108 @@ export function AiCallButton({ lead, onStarted }) {
           </div>
         </Modal>
       )}
+    </>
+  );
+}
+
+/** "Name, 98xxxxxxxx" per line; a bare number is fine too. */
+function parseContacts(text) {
+  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => {
+    const m = /^(.*?)[,\t;]\s*(\+?[\d\s()-]{8,})$/.exec(line) || /^(.*?)\s+(\+?[\d\s()-]{8,})$/.exec(line);
+    if (m) return { name: m[1].trim(), phone: m[2].trim() };
+    return /^\+?[\d\s()-]{8,}$/.test(line) ? { name: '', phone: line } : { name: line, phone: '' };
+  });
+}
+const isMobile = (p) => /^(\+?91|0)?[6-9]\d{9}$/.test(String(p || '').replace(/[\s()-]/g, ''));
+
+/** CRM page, "AI calls": interview invites, feedback and other calls to a pasted list (no sales leads are created). */
+export function CrmAiCalls() {
+  const [setup, reloadSetup] = useAgentSetup();
+  const [scriptId, setScriptId] = useState('');
+  const [details, setDetails] = useState('');
+  const [pasted, setPasted] = useState('');
+  const [res, setRes] = useState(null);
+  const [err, setErr] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const load = useCallback(() => api('/crm/ai-calls').then((r) => { setRes(r); setErr(''); }).catch((e) => setErr(e.message)), []);
+  useLive(load, 15000);
+  const people = parseContacts(pasted);
+  const ok = people.filter((x) => isMobile(x.phone));
+  const script = setup?.scripts.find((x) => x._id === scriptId);
+  const go = async () => {
+    setBusy(true); setErr('');
+    try {
+      const r = await api('/crm/ai-calls', { method: 'POST', body: { contacts: ok, scriptId, details } });
+      setDone(r); setAsking(false); setPasted(''); load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  return (
+    <>
+      {res && !res.connected && <div className="alert warn">The AI calling agent is not connected on this server yet.</div>}
+      <QueuePanel queue={res?.queue} onChanged={load} />
+      <div className="card">
+        <div className="row between"><h2 style={{ margin: 0 }}>AI calls</h2><button className="btn sm" onClick={() => setEditing(true)}>Agent setup</button></div>
+        <p className="muted small">The AI agent calls each person, one after another between 9:00 am and 8:30 pm, records the call, and writes down the answer (for an interview: coming or not, and when). Nobody is added to Sales.</p>
+        <div className="form two">
+          <ScriptSelect scripts={setup?.scripts} kinds={['INTERVIEW', 'FEEDBACK', 'OTHER']} value={scriptId} onChange={setScriptId} />
+          <Field label="Details for this call" hint={script?.kind === 'INTERVIEW' ? 'Role, date, time and place / link of the interview' : 'Anything the agent should mention on these calls'}>
+            <input value={details} maxLength={300} onChange={(e) => setDetails(e.target.value)}
+              placeholder={script?.kind === 'INTERVIEW' ? 'Sales executive interview, 25 Oct, 11 am, Sector 62 Noida office' : 'e.g. their order last week'} />
+          </Field>
+        </div>
+        <Field label="People to call" hint="One per line: Name, mobile number">
+          <textarea rows={6} value={pasted} onChange={(e) => { setPasted(e.target.value); setDone(null); }} placeholder={'Rahul Sharma, 98xxxxxxxx\nPriya, +91 97xxxxxxxx'} />
+        </Field>
+        {people.length > 0 && <p className="muted small">{ok.length} ready{people.length > ok.length ? ` · ${people.length - ok.length} without a valid mobile number will be skipped` : ''}</p>}
+        {done && (
+          <div className="alert ok">{done.queued} added to the call list.{done.skipped?.length > 0 && <div className="small">Skipped: {done.skipped.map((x) => `${x.name} (${x.reason})`).join(', ')}</div>}</div>
+        )}
+        {err && <div className="alert">{err}</div>}
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn primary" disabled={!ok.length || !scriptId} onClick={() => setAsking(true)}>Call {ok.length || ''} with AI</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Recent AI calls</h2>
+        {!res ? <Skeleton title={false} /> : !res.calls.length ? <Empty message="No AI calls from here yet." /> : (
+          <div className="table-wrap"><table className="leads">
+            <thead><tr><th>When</th><th>Who</th><th>Call type</th><th>Result</th><th></th></tr></thead>
+            <tbody>{res.calls.map((c) => (
+              <tr key={c._id}>
+                <td className="nowrap">{fmtDateTime(c.startedAt || c.createdAt)}{c.durationSec ? <div className="muted small">{fmtDur(c.durationSec)}</div> : null}</td>
+                <td className="c-lead"><b>{who(c)}</b><div className="muted small">{c.phone}</div></td>
+                <td className="small">{c.scriptName || '—'}</td>
+                <td className="small" style={{ minWidth: 180 }}>
+                  {c.accepted != null ? <Badge tone={c.accepted ? 'ok' : 'bad'}>{c.accepted ? 'Coming' : 'Not coming'}</Badge> : c.rating ? <Badge>{c.rating}/5</Badge> : <AiOutcomeBadge c={c} />}
+                  {c.appointmentAt && <div>{fmtDateTime(c.appointmentAt)}</div>}
+                  {c.summary && <div className="muted">{c.summary}</div>}
+                </td>
+                <td><button className="btn sm" onClick={() => setOpen(c._id)}>Open</button></td>
+              </tr>))}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+
+      {asking && (
+        <Modal title={`Let the AI agent call ${ok.length} ${ok.length === 1 ? 'person' : 'people'}?`} onClose={() => !busy && setAsking(false)}>
+          <p style={{ marginTop: 0 }}>Call type: <b>{script?.name}</b>{details ? <> · {details}</> : null}</p>
+          <p className="muted small">One call at a time, only between 9:00 am and 8:30 pm, every call recorded. Roughly {Math.max(1, ok.length * 2)} minutes in all; phone charges apply per minute. You can stop the list at any time.</p>
+          {err && <div className="alert">{err}</div>}
+          <div className="row modal-actions">
+            <button className="btn" disabled={busy} onClick={() => setAsking(false)}>Cancel</button>
+            <button className="btn primary" disabled={busy} onClick={go}>{busy ? 'Adding…' : 'Start calling'}</button>
+          </div>
+        </Modal>
+      )}
+      {editing && <Modal title="Agent setup" onClose={() => setEditing(false)}><AgentSetup onSaved={reloadSetup} /></Modal>}
+      {open && <AiCallDetail id={open} onClose={() => setOpen(null)} onChanged={load} />}
     </>
   );
 }

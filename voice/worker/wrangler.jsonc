@@ -8,6 +8,8 @@
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/ws", "/api/*", "/vobiz/*"] },
   "durable_objects": { "bindings": [{ "name": "SESSION", "class_name": "VoiceSession" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VoiceSession"] }],
+  // Call recordings, copied from VoBiz (which deletes them after 30 days). Private bucket; served only through the CRM.
+  "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "shine-call-recordings" }],
   "workers_dev": true,
   "vars": {
     "GROQ_MODEL": "openai/gpt-oss-120b",
@@ -19,7 +21,8 @@
     "PUBLIC_URL": "https://shine-voice-staging.shineinfosolutions1.workers.dev",
     "VOBIZ_NUMBER": "+918065354620",
     "CALL_TIME_LIMIT_SEC": "300",
-    "CRM_WEBHOOK_URL": "https://shine-attendance-staging.shineinfosolutions1.workers.dev/api/ai/webhook"
+    "CRM_WEBHOOK_URL": "https://shine-attendance-staging.shineinfosolutions1.workers.dev/api/ai/webhook",
+    "RECORDINGS_PREFIX": "staging"
   },
   // Secrets (wrangler secret put): DEEPGRAM_API_KEY, GROQ_API_KEY, RUMIK_API_KEY, STAGING_TOKEN,
   // VOBIZ_AUTH_ID, VOBIZ_AUTH_TOKEN, CRM_WEBHOOK_SECRET (same value as AI_WEBHOOK_SECRET in the CRM)
@@ -29,6 +32,7 @@
     "production": {
       "name": "shine-voice",
       "durable_objects": { "bindings": [{ "name": "SESSION", "class_name": "VoiceSession" }] },
+      "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "shine-call-recordings" }],
       "vars": {
         "GROQ_MODEL": "openai/gpt-oss-120b",
         "RUMIK_GATEWAY_URL": "https://silk-api.rumik.ai",
@@ -39,7 +43,8 @@
         "PUBLIC_URL": "https://shine-voice.shineinfosolutions1.workers.dev",
         "VOBIZ_NUMBER": "+918065354620",
         "CALL_TIME_LIMIT_SEC": "600",
-        "CRM_WEBHOOK_URL": "https://attendance.shineinfosolutions.in/api/ai/webhook"
+        "CRM_WEBHOOK_URL": "https://attendance.shineinfosolutions.in/api/ai/webhook",
+        "RECORDINGS_PREFIX": "calls"
       }
     }
   }

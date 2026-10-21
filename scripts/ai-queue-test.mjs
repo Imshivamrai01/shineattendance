@@ -67,6 +67,30 @@ try {
   const note = await M.Notification.findOne({ title: 'Interested lead from an AI call', body: new RegExp(tag) });
   check('Sales is notified about the interested lead', !!note, note?.body);
 
+  // CRM page: interview invites to a pasted list (no sales leads)
+  const scripts = await ai.aiScripts();
+  const interview = scripts.find((x) => x.kind === 'INTERVIEW');
+  check('Default call types exist', ['SALES', 'INTERVIEW', 'FEEDBACK'].every((k) => scripts.some((x) => x.kind === k)), scripts.map((x) => x.name).join(', '));
+  await M.AiCall.updateMany({ status: { $in: ['QUEUED', 'IN_PROGRESS'] }, lead: { $in: [a._id, b._id] } }, { $set: { status: 'COMPLETED' } });
+  const leadsBefore = await M.Lead.countDocuments();
+  const cq = await ai.queueContacts(ctx, [{ name: `${tag} Candidate`, phone: '9000000005' }, { name: 'Bad', phone: '12345' }], { scriptId: interview._id, purpose: 'Interview 25 Oct 11 am' });
+  check('CRM list queues mobiles and skips bad numbers', cq.queued === 1 && cq.skipped.length === 1, JSON.stringify(cq.skipped));
+  await flush();
+  const cd = dials.at(-1);
+  check('Interview call carries its call type and details', cd?.script?.kind === 'INTERVIEW' && cd.lead.name === `${tag} Candidate` && !cd.lead.id && /25 Oct/.test(cd.lead.purpose), JSON.stringify({ type: cd?.script?.name, name: cd?.lead?.name, details: cd?.lead?.purpose }));
+  const cCall = await M.AiCall.findOne({ contactName: `${tag} Candidate` });
+  await ai.ingestAiEvent({ event: 'call.ended', callId: cCall.callId, direction: 'outbound', phone: '+919000000005',
+    transcript: [{ role: 'assistant', content: 'Interview invite' }, { role: 'user', content: 'Haan aa jaunga' }],
+    extract: { outcome: 'INFO_GIVEN', summary: 'Will attend the interview.', accepted: true, appointmentAt: '2026-10-25T11:00:00+05:30' } });
+  await flush();
+  const after = await M.AiCall.findById(cCall._id).lean();
+  check('Interview answer is stored', after.accepted === true && after.appointmentAt?.toISOString() === '2026-10-25T05:30:00.000Z', `${after.accepted} ${after.appointmentAt?.toISOString()}`);
+  check('No sales lead is created for an interview call', (await M.Lead.countDocuments()) === leadsBefore && !after.lead);
+  const iNote = await M.Notification.findOne({ user: admin._id, title: new RegExp(`${tag} Candidate accepted the interview`) });
+  check('Whoever started it is told the answer', !!iNote, iNote?.title);
+  await M.Notification.deleteMany({ title: new RegExp(tag) });
+  await M.AiCall.deleteMany({ contactName: new RegExp(tag) });
+
   await M.AiCall.insertMany([{ callId: `list-${new mongoose.Types.ObjectId()}`, status: 'SCHEDULED', lead: c._id, phone: '+911204567890', requestedBy: admin._id }]);
   const cancelled = await ai.cancelQueued(ctx);
   check('Stop the list removes waiting calls', cancelled.cancelled >= 1, `${cancelled.cancelled} removed`);

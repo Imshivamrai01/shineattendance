@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, fmtDateTime } from '@/lib/client';
 import { Badge, Field, Skeleton } from '@/components/ui';
+import { CrmAiCalls } from '@/components/AiPortal';
 
 const CHUNK = 20;
 const fill = (text, params) => text.replace(/\{\{(\d+)\}\}/g, (_, n) => params[n - 1] || `{{${n}}}`);
@@ -48,6 +49,7 @@ export default function Crm() {
   const [err, setErr] = useState('');
   const [note, setNote] = useState('');
   const [tab, setTab] = useState('send');
+  const [mode, setMode] = useState('ai'); // AI calls | WhatsApp
   const [showConnect, setShowConnect] = useState(false);
   // composer
   const [tplKey, setTplKey] = useState('');
@@ -109,9 +111,15 @@ export default function Crm() {
   return (
     <>
       <div className="row between" style={{ marginBottom: 14 }}>
-        <div><h1>CRM · WhatsApp</h1><div className="muted">Interview invites, employee messages and bulk updates</div></div>
-        {d.configured && <button className="btn" onClick={() => setShowConnect(!showConnect)}>{showConnect ? 'Hide settings' : 'WhatsApp settings'}</button>}
+        <div><h1>CRM</h1><div className="muted">Interview invites, feedback calls, employee messages and bulk updates</div></div>
+        {mode === 'whatsapp' && d.configured && <button className="btn" onClick={() => setShowConnect(!showConnect)}>{showConnect ? 'Hide settings' : 'WhatsApp settings'}</button>}
       </div>
+      <div className="tabs">
+        <button className={`btn ${mode === 'ai' ? 'primary' : ''}`} onClick={() => setMode('ai')}>AI calls</button>
+        <button className={`btn ${mode === 'whatsapp' ? 'primary' : ''}`} onClick={() => setMode('whatsapp')}>WhatsApp</button>
+      </div>
+      {mode === 'ai' && <CrmAiCalls />}
+      {mode === 'whatsapp' && <>
       {note && <div className="alert ok">{note}</div>}
       {(!d.configured || showConnect) && <Connect d={d} onSaved={(m) => { setNote(m); setShowConnect(false); load(); }} />}
       {d.error && <div className="alert">{d.error}</div>}
@@ -241,6 +249,7 @@ export default function Crm() {
           )}
         </>
       )}
+      </>}
     </>
   );
 }

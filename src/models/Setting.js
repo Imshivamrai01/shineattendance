@@ -13,6 +13,8 @@ const S = new mongoose.Schema({
   waPhoneId: String, waBusinessId: String, waToken: String,
   // Google Places API key for the Sales lead finder (OpenStreetMap is used without it). Never sent to the browser.
   placesKey: String,
+  // What the AI calling agent knows about the company (services, timings, address, FAQs). Used on every AI call.
+  aiCompanyInfo: { type: String, maxlength: 4000 },
   lastSheetSync: Date, lastMailError: String, mailEveryCheckin: { type: Boolean, default: false }, lastAbsentMailDate: String, lastMailErrorAt: Date, lastSheetError: String, lastSheetErrorAt: Date,
 }, { timestamps: true });
 export default mongoose.models.Setting || mongoose.model('Setting', S);
