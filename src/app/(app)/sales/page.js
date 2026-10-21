@@ -441,7 +441,7 @@ export default function Sales() {
       <div className="tabs">
         {tabs.map(([k, label]) => (
           <button key={k} className={`btn sm ${tab === k ? 'primary' : ''}`} onClick={() => { setPreset({}); show(k); }}>
-            {label}{k === 'followups' && d.counts.dueToday + d.counts.overdue > 0 ? ` (${d.counts.dueToday + d.counts.overdue})` : ''}
+            {label}{k === 'followups' && d.counts.dueToday + d.counts.overdue > 0 ? ` (${d.counts.dueToday + d.counts.overdue})` : ''}{k === 'ai' && d.aiCallbacks ? ` (${d.aiCallbacks})` : ''}
           </button>))}
       </div>
 
@@ -449,7 +449,7 @@ export default function Sales() {
       {tab === 'calls' && <CallLog d={d} preset={preset} />}
       {tab === 'leads' && <LeadsTable d={d} preset={preset} />}
       {tab === 'followups' && <LeadsTable d={d} fixed={{ due: 'today', open: '1' }} preset={{ sort: 'followup' }} title="Follow-ups due today and overdue" />}
-      {tab === 'ai' && <AiPortal />}
+      {tab === 'ai' && <AiPortal d={d} />}
       {tab === 'finder' && <Finder d={d} onDone={load} go={go} />}
       {tab === 'team' && manager && <Team onChanged={load} />}
 

@@ -9,7 +9,8 @@ export const AI_OUTCOMES = ['CALLBACK', 'INTERESTED', 'INFO_GIVEN', 'NOT_INTERES
 const S = new Schema({
   callId: { type: String, required: true, unique: true }, // VoBiz CallUUID
   direction: { type: String, enum: ['outbound', 'inbound', 'web'], default: 'outbound' },
-  status: { type: String, enum: ['QUEUED', 'IN_PROGRESS', 'COMPLETED', 'FAILED'], default: 'QUEUED', index: true },
+  // SCHEDULED = on the call list waiting for a free line, QUEUED = dialling, CANCELLED = taken off the list
+  status: { type: String, enum: ['SCHEDULED', 'QUEUED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED'], default: 'QUEUED', index: true },
   phone: String, // the other party, E.164
   phoneKey: { type: String, index: true },
   lead: { type: Schema.Types.ObjectId, ref: 'Lead', index: true },

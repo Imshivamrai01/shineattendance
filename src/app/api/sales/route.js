@@ -1,5 +1,6 @@
 import { M, getSettings } from '@/lib/db';
 import { salesHandler, leadScope, salesTeam, startOfTodayIst, endOfTodayIst, CLOSED } from '@/lib/sales';
+import { aiCallScope } from '@/lib/aiCalls';
 
 // Sales overview: lead counts, calls made today, follow-ups due, per-person numbers (managers) and recent activity.
 export const GET = salesHandler(async (ctx) => {
@@ -35,6 +36,8 @@ export const GET = salesHandler(async (ctx) => {
   out.recent = await M.LeadActivity.find(actFilter).sort({ createdAt: -1 }).limit(25).populate('by', 'name').populate('lead', 'name phone status').lean();
   out.scrapes = await M.ScrapeJob.find(mgr ? {} : { by: ctx.user._id }).sort({ createdAt: -1 }).limit(8).populate('by', 'name').lean();
   out.team = await salesTeam();
+  // AI Portal tab badge: callbacks the AI agent collected that nobody has taken yet
+  out.aiCallbacks = await M.AiCall.countDocuments({ ...(await aiCallScope(ctx)), callbackRequested: true, handledAt: null });
   // Calls this person dialled from the app and has not said how they went yet (last 3 days)
   out.myPending = await M.LeadActivity.find({ type: 'CALL', outcome: 'PENDING', by: ctx.user._id, createdAt: { $gt: new Date(Date.now() - 3 * 86400000) } })
     .sort({ createdAt: -1 }).limit(20).populate('lead', 'name phone status').lean();

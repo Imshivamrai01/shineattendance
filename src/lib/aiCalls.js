@@ -53,27 +53,139 @@ export function dialable(phone) {
   return /^[6-9]\d{9}$/.test(k) ? `+91${k}` : '';
 }
 
-/** Ask the voice worker to call a lead. Returns the queued AiCall. */
-export async function startAiCall(ctx, lead, { purpose = '' } = {}) {
-  const to = dialable(lead.phone);
-  if (!to) throw bad('This lead has no Indian mobile number the agent can call');
-  if (lead.status === 'NOT_INTERESTED' && /asked not to be called/i.test(lead.notes || '')) throw bad('This person asked not to be called');
-  // One AI call per lead at a time (also protects against double clicks).
-  const busy = await M.AiCall.findOne({ lead: lead._id, status: { $in: ['QUEUED', 'IN_PROGRESS'] }, createdAt: { $gt: new Date(Date.now() - 5 * 60000) } });
-  if (busy) throw new HttpError(409, 'An AI call to this lead is already in progress');
+const optedOut = (lead) => lead.status === 'NOT_INTERESTED' && /asked not to be called/i.test(lead.notes || '');
+
+/** Ask the voice worker to dial; returns the carrier call id. */
+async function requestDial(lead, to, purpose, requestedBy) {
   const res = await voiceFetch('/api/call', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ to, lead: { id: String(lead._id), name: lead.name, purpose: purpose || '' }, requestedBy: String(ctx.user._id) }),
+    body: JSON.stringify({ to, lead: { id: String(lead._id), name: lead.name, purpose: purpose || '' }, requestedBy: requestedBy ? String(requestedBy) : undefined }),
     signal: AbortSignal.timeout(20000),
   });
   const out = await res.json().catch(() => ({}));
   if (!res.ok || !out.callId) throw new HttpError(502, `The calling agent could not dial: ${out.error || `HTTP ${res.status}`}`);
+  return out.callId;
+}
+
+/** "AI call" on one lead: dial now, outside the call list. Returns the AiCall. */
+export async function startAiCall(ctx, lead, { purpose = '' } = {}) {
+  const to = dialable(lead.phone);
+  if (!to) throw bad('This lead has no Indian mobile number the agent can call');
+  if (optedOut(lead)) throw bad('This person asked not to be called');
+  // One AI call per lead at a time (also protects against double clicks).
+  const busy = await M.AiCall.findOne({ lead: lead._id, status: { $in: ['QUEUED', 'IN_PROGRESS'] }, updatedAt: { $gt: new Date(Date.now() - STUCK_MS) } });
+  if (busy) throw new HttpError(409, 'An AI call to this lead is already in progress');
+  const callId = await requestDial(lead, to, purpose, ctx.user._id);
   return M.AiCall.findOneAndUpdate(
-    { callId: out.callId },
-    { $setOnInsert: { callId: out.callId, direction: 'outbound', status: 'QUEUED', phone: to, phoneKey: phoneKey(to), lead: lead._id, requestedBy: ctx.user._id, purpose: String(purpose).slice(0, 300) } },
+    { callId },
+    { $setOnInsert: { callId, direction: 'outbound', status: 'QUEUED', phone: to, phoneKey: phoneKey(to), lead: lead._id, requestedBy: ctx.user._id, purpose: String(purpose).slice(0, 300), startedAt: new Date() } },
     { upsert: true, new: true },
   );
+}
+
+// ---- Call list: leads queued for the agent, dialled one after another ----
+
+const STUCK_MS = 15 * 60000; // a call with no news for this long no longer blocks the next one
+const MAX_ACTIVE = () => Math.max(1, Number(process.env.AI_MAX_CONCURRENT) || 1);
+const QUEUE_LIMIT = 200;
+
+/**
+ * Calls may start inside AI_CALL_WINDOW, India time ("HH:MM-HH:MM", default 09:00-20:30:
+ * TRAI allows 9:00-21:00, and 30 minutes are kept for the call itself).
+ */
+export function inCallingHours(now = new Date()) {
+  const w = /^(\d\d):(\d\d)-(\d\d):(\d\d)$/.exec(process.env.AI_CALL_WINDOW || '') || [null, '09', '00', '20', '30'];
+  const from = Number(w[1]) * 60 + Number(w[2]), to = Number(w[3]) * 60 + Number(w[4]);
+  const ist = new Date(now.getTime() + 330 * 60000);
+  const m = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  return m >= from && m <= to;
+}
+
+/** Why a lead can't go on the call list, or '' when it can. */
+function skipReason(lead) {
+  if (!dialable(lead.phone)) return 'no Indian mobile number';
+  if (optedOut(lead)) return 'asked not to be called';
+  if (CLOSED.includes(lead.status)) return `lead is ${lead.status.toLowerCase().replace('_', ' ')}`;
+  return '';
+}
+
+/** Put leads on the AI call list. Agents can only queue leads assigned to them. Returns { queued, skipped }. */
+export async function queueAiCalls(ctx, leadIds, { purpose = '' } = {}) {
+  const ids = [...new Set((leadIds || []).map(String))].filter((id) => mongoose.isValidObjectId(id));
+  if (!ids.length) throw bad('Choose at least one lead');
+  if (ids.length > QUEUE_LIMIT) throw bad(`At most ${QUEUE_LIMIT} leads at a time`);
+  const scope = ctx.sales === 'MANAGER' ? {} : { assignedTo: ctx.user._id };
+  const leads = await M.Lead.find({ _id: { $in: ids }, ...scope }).lean();
+  const busy = new Set((await M.AiCall.find({ lead: { $in: leads.map((l) => l._id) }, status: { $in: ['SCHEDULED', 'QUEUED', 'IN_PROGRESS'] } }).distinct('lead')).map(String));
+  const skipped = [], docs = [];
+  for (const l of leads) {
+    const why = busy.has(String(l._id)) ? 'already on the call list' : skipReason(l);
+    if (why) { skipped.push({ name: l.name, reason: why }); continue; }
+    const to = dialable(l.phone);
+    docs.push({ callId: `list-${new mongoose.Types.ObjectId()}`, direction: 'outbound', status: 'SCHEDULED', phone: to, phoneKey: phoneKey(to),
+      lead: l._id, requestedBy: ctx.user._id, purpose: String(purpose).slice(0, 300) });
+  }
+  if (ids.length > leads.length) skipped.push({ name: `${ids.length - leads.length} lead(s)`, reason: 'not found or not yours' });
+  if (docs.length) {
+    await M.AiCall.insertMany(docs);
+    defer(() => dialNext().catch((e) => console.error('AI dialer:', e.message)));
+  }
+  return { queued: docs.length, skipped };
+}
+
+/** Take waiting calls off the list. Managers clear everyone's, agents their own. */
+export async function cancelQueued(ctx) {
+  const f = { status: 'SCHEDULED', ...(ctx.sales === 'MANAGER' ? {} : { requestedBy: ctx.user._id }) };
+  const r = await M.AiCall.updateMany(f, { $set: { status: 'CANCELLED', hangupCause: `Removed from the list by ${ctx.user.name}` } });
+  return { cancelled: r.modifiedCount };
+}
+
+/**
+ * Dial the next call on the list if a line is free and it's calling hours. Safe to call any time and from
+ * anywhere (after a call ends, after queueing, from the cron): each list entry is claimed atomically.
+ */
+export async function dialNext() {
+  if (!aiConfigured()) return { dialled: 0, reason: 'not connected' };
+  if (!inCallingHours()) return { dialled: 0, reason: 'outside calling hours' };
+  let dialled = 0;
+  for (let tries = 0; tries < 5; tries++) {
+    const active = await M.AiCall.countDocuments({ status: { $in: ['QUEUED', 'IN_PROGRESS'] }, updatedAt: { $gt: new Date(Date.now() - STUCK_MS) } });
+    if (active >= MAX_ACTIVE()) break;
+    const next = await M.AiCall.findOneAndUpdate({ status: 'SCHEDULED' }, { $set: { status: 'QUEUED' } }, { sort: { createdAt: 1 }, new: true });
+    if (!next) break;
+    const lead = next.lead ? await M.Lead.findById(next.lead).lean() : null;
+    const why = !lead ? 'lead was deleted' : skipReason(lead);
+    if (why) { await M.AiCall.updateOne({ _id: next._id }, { $set: { status: 'CANCELLED', hangupCause: `Skipped: ${why}` } }); continue; }
+    try {
+      const callId = await requestDial(lead, next.phone, next.purpose, next.requestedBy);
+      // The worker may already have reported this call (a fast failure): keep that record and drop the placeholder.
+      const reported = await M.AiCall.findOne({ callId });
+      if (reported) {
+        await M.AiCall.updateOne({ _id: reported._id }, { $set: { lead: lead._id, requestedBy: next.requestedBy, purpose: next.purpose } });
+        await M.AiCall.deleteOne({ _id: next._id });
+      } else await M.AiCall.updateOne({ _id: next._id }, { $set: { callId, startedAt: new Date() } });
+      dialled++;
+    } catch (e) {
+      await M.AiCall.updateOne({ _id: next._id }, { $set: { status: 'FAILED', outcome: 'FAILED', hangupCause: String(e.message).slice(0, 200), endedAt: new Date() } });
+    }
+  }
+  return { dialled };
+}
+
+/** What the call list looks like now (for the AI Portal). */
+export async function queueStatus(ctx) {
+  const mine = ctx.sales === 'MANAGER' ? {} : { requestedBy: ctx.user._id };
+  const [scheduled, active, next] = await Promise.all([
+    M.AiCall.countDocuments({ ...mine, status: 'SCHEDULED' }),
+    M.AiCall.findOne({ ...mine, status: { $in: ['QUEUED', 'IN_PROGRESS'] }, updatedAt: { $gt: new Date(Date.now() - STUCK_MS) } }).populate('lead', 'name').lean(),
+    M.AiCall.find({ ...mine, status: 'SCHEDULED' }).sort({ createdAt: 1 }).limit(5).populate('lead', 'name').lean(),
+  ]);
+  return {
+    scheduled, callingHours: inCallingHours(),
+    active: active && { _id: active._id, status: active.status, name: active.lead?.name, phone: active.phone },
+    next: next.map((c) => ({ _id: c._id, name: c.lead?.name, phone: c.phone })),
+  };
 }
 
 /** Stream a call's recording from the voice worker (which holds the carrier credentials). */
@@ -124,6 +236,7 @@ export async function ingestAiEvent(ev) {
   if (ev.event === 'call.ended' || ev.event === 'call.failed') {
     const claimed = await M.AiCall.findOneAndUpdate({ _id: call._id, appliedToLead: { $ne: true } }, { $set: { appliedToLead: true } }, { new: true });
     if (claimed) await applyToLead(claimed);
+    defer(() => dialNext().catch((e) => console.error('AI dialer:', e.message)));
   }
   queueAiCallSync(call._id);
   return call;
@@ -159,11 +272,14 @@ async function applyToLead(call) {
   await M.LeadActivity.create(act);
   if (!call.lead) await M.AiCall.updateOne({ _id: call._id }, { $set: { lead: lead._id } });
 
-  if (followUpAt) {
+  if (followUpAt || status === 'INTERESTED') {
     // Tell whoever owns the lead, or every sales manager when nobody does.
     const to = lead.assignedTo ? [lead.assignedTo] : (await salesTeam()).filter((u) => u.sales === 'MANAGER').map((u) => u._id);
-    const at = followUpAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    note(to, { title: 'Callback requested on an AI call', body: `${lead.name} (${call.phone}) wants a call back around ${at}.${call.requirement ? ` Needs: ${call.requirement}` : ''}`, link: `/sales/leads/${lead._id}` });
+    const needs = call.requirement ? ` Needs: ${call.requirement}` : '';
+    if (followUpAt) {
+      const at = followUpAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      note(to, { title: 'Callback requested on an AI call', body: `${lead.name} (${call.phone}) wants a call back around ${at}.${needs}`, link: `/sales/leads/${lead._id}` });
+    } else note(to, { title: 'Interested lead from an AI call', body: `${lead.name} (${call.phone}) is interested.${needs}`, link: `/sales/leads/${lead._id}` });
   }
 }
 
