@@ -138,3 +138,22 @@ export function taskRow(t, label, score) {
 }
 export const upsertTask = (settings, row) => post(settings, { action: 'upsert', tab: TASK_TAB, header: TASK_HEADER, rows: [row] });
 export const replaceTasks = (settings, rows) => post(settings, { action: 'replace', tab: TASK_TAB, header: TASK_HEADER, rows });
+
+// ---- AI Calls tab: one row per call handled by the AI voice agent, keyed by the carrier call id ----
+export const AI_TAB = 'AI Calls';
+export const AI_HEADER = ['Key', 'Date', 'Time', 'Direction', 'Phone', 'Name', 'Company', 'Requirement', 'Outcome', 'Interest', 'Callback at', 'Callback handled',
+  'Summary', 'Duration (s)', 'Recording', 'Lead', 'Status', 'Updated'];
+const istDate = (d) => (d ? new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '');
+
+/** `c` = AiCall with `lead` populated ({ name }). Links point into the CRM, never at the carrier's recording URL. */
+export function aiCallRow(c, appUrl) {
+  const at = c.startedAt || c.createdAt;
+  const base = String(appUrl || '').replace(/\/$/, '');
+  return [
+    c.callId, istDate(at), ist(at), c.direction || '', c.phone || '', c.callerName || '', c.company || '', c.requirement || '', c.outcome || c.status || '',
+    c.interest || '', c.callbackRequested ? (c.callbackAt ? new Date(c.callbackAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Yes (no time given)') : '',
+    c.callbackRequested ? (c.handledAt ? 'Yes' : 'No') : '', c.summary || '', c.durationSec ?? '',
+    c.recordingId && base ? `${base}/sales?tab=ai&call=${c._id}` : '', c.lead?._id && base ? `${base}/sales/leads/${c.lead._id}` : (c.lead?.name || ''), c.status || '', new Date().toISOString(),
+  ];
+}
+export const upsertAiCall = (settings, row) => post(settings, { action: 'upsert', tab: AI_TAB, header: AI_HEADER, rows: [row] });

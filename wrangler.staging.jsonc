@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Staging copy of the app for testing the AI calling agent before production.
+  // Own worker + own database (MONGODB_URI secret points at shine_attendance_staging). No custom domain, no crons, no email.
+  // Deploy: npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy -c wrangler.staging.jsonc
+  "name": "shine-attendance-staging",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "shine-attendance-staging" }],
+  "workers_dev": true,
+  "vars": {
+    "APP_URL": "https://shine-attendance-staging.shineinfosolutions1.workers.dev",
+    "SESSION_HOURS": "8",
+    "VOICE_API_URL": "https://shine-voice-staging.shineinfosolutions1.workers.dev"
+  },
+  // Secrets: MONGODB_URI, CRON_SECRET, AI_WEBHOOK_SECRET (same value as the voice worker's CRM_WEBHOOK_SECRET)
+  "placement": { "mode": "smart" },
+  "limits": { "cpu_ms": 30000 },
+  "observability": { "enabled": true }
+}

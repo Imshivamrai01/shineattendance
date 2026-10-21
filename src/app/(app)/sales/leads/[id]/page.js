@@ -8,6 +8,7 @@ import { useMe } from '@/components/Shell';
 import { Field, Skeleton } from '@/components/ui';
 import { STATUS, OUTCOMES, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, when, LeadForm } from '@/components/SalesBits';
 import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur } from '@/components/SalesCall';
+import { AiCallButton, AiCallDetail } from '@/components/AiPortal';
 
 const at11 = (days) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(11, 0, 0, 0); return toLocalInput(d); };
 const QUICK = [['In 2 hours', () => toLocalInput(new Date(Date.now() + 2 * 3600000))], ['Tomorrow', () => at11(1)], ['In 3 days', () => at11(3)], ['Next week', () => at11(7)]];
@@ -64,10 +65,12 @@ function LogForm({ lead, onSaved }) {
 
 function Timeline({ lead, activity, names, me }) {
   const start = useCall();
+  const [aiCall, setAiCall] = useState(null);
   const who = (id) => (id ? names[id] || 'someone' : 'nobody');
   const line = (a) => {
     const by = <b>{a.by?.name || 'System'}</b>;
     switch (a.type) {
+      case 'AI_CALL': return <><b>AI agent</b> {a.durationSec ? 'talked' : 'called'} <OutcomeBadge o={a.outcome} />{a.durationSec ? <span className="muted small"> · {fmtDur(Math.round(a.durationSec))}</span> : null}{a.aiCall && <> · <button className="linkish" onClick={() => setAiCall(a.aiCall)}>transcript &amp; recording</button></>}</>;
       case 'CALL': return <>{by} called <OutcomeBadge o={a.outcome} />{a.durationSec ? <span className="muted small"> · {fmtDur(a.durationSec)}</span> : null}{!a.viaApp && <span className="muted small"> · other phone</span>}</>;
       case 'FOLLOW_UP': return a.followUpAt ? <>{by} set a follow-up for <b>{when(a.followUpAt)}</b></> : <>{by} cleared the follow-up</>;
       case 'STATUS': return <>{by} changed status <StatusBadge s={a.from} /> → <StatusBadge s={a.to} /></>;
@@ -87,7 +90,7 @@ function Timeline({ lead, activity, names, me }) {
         {activity.map((a) => (
           <li key={a._id} className={`tl-${a.type.toLowerCase()}`}>
             <div className="tl-head"><span>{line(a)}</span><span className="muted small nowrap">{when(a.createdAt)}</span></div>
-            {a.type === 'CALL' && (a.to || a.followUpAt) && (
+            {(a.type === 'CALL' || a.type === 'AI_CALL') && (a.to || a.followUpAt) && (
               <div className="muted small">{a.to && <>Status → {STATUS[a.to]?.[0]}</>}{a.to && a.followUpAt && ' · '}{a.followUpAt && <>Next follow-up {when(a.followUpAt)}</>}</div>)}
             {a.note && a.type !== 'EDIT' && <div className="tl-note">{a.note}</div>}
             {a.type === 'EDIT' && <div className="muted small">{a.note}</div>}
@@ -95,6 +98,7 @@ function Timeline({ lead, activity, names, me }) {
               <button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => start(lead, a)}>Fill in what happened</button>)}
           </li>))}
       </ol>
+      {aiCall && <AiCallDetail id={aiCall} onClose={() => setAiCall(null)} />}
     </div>
   );
 }
@@ -135,6 +139,7 @@ export default function LeadPage() {
 
       <div className="card call-card">
         <CallButton lead={l} big />
+        <AiCallButton lead={l} onStarted={() => { setMsg('The AI agent is calling now. The result shows up here when the call ends.'); load(); }} />
         <ContactLinks lead={l} labels />
         <div className="call-card-info">
           {l.callCount ? <>Last call: <b>{l.lastCallBy?.name}</b> · <OutcomeBadge o={l.lastOutcome} /> · {when(l.lastCallAt)} · {l.callCount} call{l.callCount > 1 ? 's' : ''} ({l.connectedCount || 0} talked)</> : 'Not called yet'}

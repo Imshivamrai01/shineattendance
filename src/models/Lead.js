@@ -16,7 +16,7 @@ const S = new Schema({
   instagram: { type: String, index: true, sparse: true }, // https://instagram.com/<handle>, lower case (also a dedupe key)
   website: String, email: String, mapsUrl: String,
   rating: Number, reviews: Number, lat: Number, lng: Number,
-  source: { type: String, enum: ['GOOGLE', 'OSM', 'MANUAL'], default: 'MANUAL' },
+  source: { type: String, enum: ['GOOGLE', 'OSM', 'MANUAL', 'AI_CALL'], default: 'MANUAL' },
   sourceId: { type: String, index: true, sparse: true }, // Google place id / OSM element id
   nameKey: { type: String, index: true }, // normalised name + rough position (dedupe key for leads without a phone)
   status: { type: String, enum: LEAD_STATUSES, default: 'NEW', index: true },

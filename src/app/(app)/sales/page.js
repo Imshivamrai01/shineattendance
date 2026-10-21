@@ -7,8 +7,9 @@ import { Badge, Field, Skeleton, Empty } from '@/components/ui';
 import { STATUS, GRADE, CATEGORY_HINTS, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, outcomeLabel, when, LeadForm } from '@/components/SalesBits';
 import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur } from '@/components/SalesCall';
 import { useMe } from '@/components/Shell';
+import { AiPortal } from '@/components/AiPortal';
 
-const TABS = [['overview', 'Overview'], ['leads', 'Leads'], ['followups', 'Follow-ups'], ['calls', 'Call log'], ['finder', 'Lead finder'], ['team', 'Team']];
+const TABS = [['overview', 'Overview'], ['leads', 'Leads'], ['followups', 'Follow-ups'], ['calls', 'Call log'], ['ai', 'AI Portal'], ['finder', 'Lead finder'], ['team', 'Team']];
 const todayIst = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
 const dueTone = (d) => { if (!d) return ''; const t = new Date(d); const now = new Date(); return t < now ? (t.toDateString() === now.toDateString() ? 'warn' : 'bad') : ''; };
@@ -16,6 +17,7 @@ const dueTone = (d) => { if (!d) return ''; const t = new Date(d); const now = n
 function activityText(a) {
   const lead = a.lead?.name ? <Link href={`/sales/leads/${a.lead._id}`}>{a.lead.name}</Link> : 'a lead';
   switch (a.type) {
+    case 'AI_CALL': return <>AI agent called {lead} · <b>{outcomeLabel(a.outcome)}</b>{a.followUpAt ? ` · callback ${fmtDateTime(a.followUpAt)}` : ''}</>;
     case 'CALL': return <>called {lead} · <b>{outcomeLabel(a.outcome)}</b>{a.followUpAt ? ` · follow-up ${fmtDateTime(a.followUpAt)}` : ''}</>;
     case 'FOLLOW_UP': return a.followUpAt ? <>set a follow-up for {lead} on {fmtDateTime(a.followUpAt)}</> : <>cleared the follow-up of {lead}</>;
     case 'STATUS': return <>moved {lead} to <b>{STATUS[a.to]?.[0] || a.to}</b></>;
@@ -447,6 +449,7 @@ export default function Sales() {
       {tab === 'calls' && <CallLog d={d} preset={preset} />}
       {tab === 'leads' && <LeadsTable d={d} preset={preset} />}
       {tab === 'followups' && <LeadsTable d={d} fixed={{ due: 'today', open: '1' }} preset={{ sort: 'followup' }} title="Follow-ups due today and overdue" />}
+      {tab === 'ai' && <AiPortal />}
       {tab === 'finder' && <Finder d={d} onDone={load} go={go} />}
       {tab === 'team' && manager && <Team onChanged={load} />}
 

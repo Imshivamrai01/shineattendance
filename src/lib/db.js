@@ -18,6 +18,7 @@ import '../models/WaMessage.js';
 import '../models/Lead.js';
 import '../models/LeadActivity.js';
 import '../models/ScrapeJob.js';
+import '../models/AiCall.js';
 
 const g = globalThis;
 g.__mongo ||= { conn: null, promise: null };
@@ -127,6 +128,7 @@ export const M = {
   get Lead() { return model('Lead'); },
   get LeadActivity() { return model('LeadActivity'); },
   get ScrapeJob() { return model('ScrapeJob'); },
+  get AiCall() { return model('AiCall'); },
 };
 
 export async function getSettings() {

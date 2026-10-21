@@ -19,7 +19,8 @@
     "SESSION_HOURS": "8",
     "MAIL_FROM": "Shine Attendance <noreply-attendance@shineinfosolutions.in>",
     // The 8 PM daily report goes only here
-    "REPORT_EMAIL": "shineinfosolutions1@gmail.com"
+    "REPORT_EMAIL": "shineinfosolutions1@gmail.com",
+    "VOICE_API_URL": "https://shine-voice.shineinfosolutions1.workers.dev"
   },
   // Cloudflare Email Sending (domain onboarded with `wrangler email sending enable shineinfosolutions.in`)
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["noreply-attendance@shineinfosolutions.in"] }],
