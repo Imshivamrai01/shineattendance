@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/client';
 import { Badge, Field, Modal } from '@/components/ui';
 
@@ -95,4 +95,28 @@ export function when(d) {
   if (diff === -1) return `Yesterday, ${time}`;
   if (diff === 1) return `Tomorrow, ${time}`;
   return `${t.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+// Initials in a coloured circle; the colour is fixed per name so a person always looks the same.
+const AV = ['#4257e6', '#0e9f6e', '#d97706', '#db2777', '#7c3aed', '#0891b2', '#dc2626', '#4d7c0f'];
+export function Initials({ name, ai, size = 34 }) {
+  const n = String(name || '?').trim();
+  const hue = AV[[...n].reduce((a, c) => a + c.charCodeAt(0), 0) % AV.length];
+  const txt = ai ? 'AI' : n.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+  return <span className={`initials ${ai ? 'ai' : ''}`} style={{ width: size, height: size, fontSize: size * 0.38, background: ai ? undefined : hue }} aria-hidden="true">{txt}</span>;
+}
+
+/** Long text cut to `lines` lines, with Show more / Show less when it does not fit. */
+export function Clamp({ text, lines = 2, className = '' }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+  useEffect(() => { const el = ref.current; if (el && !open) setLong(el.scrollHeight > el.clientHeight + 2); }, [text, open]);
+  if (!text) return null;
+  return (
+    <div className={`clamp-wrap ${className}`}>
+      <div className="clamp-box"><div ref={ref} className={open ? 'clamp-text' : 'clamp-text clamp'} style={open ? undefined : { WebkitLineClamp: lines }}>{text}</div></div>
+      {(long || open) && <button type="button" className="linkish small" onClick={() => setOpen(!open)}>{open ? 'Show less' : 'Show more'}</button>}
+    </div>
+  );
 }

@@ -95,6 +95,7 @@ async function requestDial(target, to, purpose, requestedBy, scriptId) {
       to, requestedBy: requestedBy ? String(requestedBy) : undefined,
       lead: { id: target.id ? String(target.id) : undefined, name: target.name || '', purpose: purpose || '' },
       company: settings.aiCompanyInfo || '',
+      voice: { provider: settings.aiVoiceProvider || 'auto', sarvamSpeaker: settings.aiSarvamSpeaker || '' },
       script: script && { name: script.name, kind: script.kind, opening: script.opening || '', instructions: script.instructions || '', collect: script.collect || '' },
     }),
     signal: AbortSignal.timeout(20000),
@@ -371,6 +372,66 @@ async function applyToLead(call) {
       note(to, { title: 'Callback requested on an AI call', body: `${lead.name} (${call.phone}) wants a call back around ${at}.${needs}`, link: `/sales/leads/${lead._id}` });
     } else note(to, { title: 'Interested lead from an AI call', body: `${lead.name} (${call.phone}) is interested.${needs}`, link: `/sales/leads/${lead._id}` });
   }
+}
+
+// ---- Recordings: fetch from VoBiz when its "recording ready" callback never came ----
+
+async function syncOne(callId, part = '') {
+  try {
+    const res = await voiceFetch('/api/recording/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callId, part }), signal: AbortSignal.timeout(25000) });
+    const out = await res.json().catch(() => ({}));
+    return out.found ? out : null;
+  } catch (e) { console.error('recording sync', callId, part, e.message); return null; }
+}
+
+/** Make sure one AI call (and its transfer part) has its recording. Returns true when something was added. */
+export async function ensureAiCallRecording(call) {
+  if (!aiConfigured() || /^list-/.test(call.callId) || call.status !== 'COMPLETED') return false;
+  let added = false;
+  if (!call.recordingId) {
+    const r = await syncOne(call.callId);
+    if (r) { await M.AiCall.updateOne({ _id: call._id }, { $set: { recordingId: r.id, recordingDurationSec: r.durationSec } }); call.recordingId = r.id; added = true; }
+  }
+  if (call.transfer?.status === 'ENDED' && !call.transfer.recordingId) {
+    const r = await syncOne(call.callId, 'transfer');
+    if (r) { await M.AiCall.updateOne({ _id: call._id }, { $set: { 'transfer.recordingId': r.id, 'transfer.recordingDurationSec': r.durationSec } }); added = true; }
+  }
+  if (added) queueAiCallSync(call._id);
+  return added;
+}
+
+/** Cron: recordings still missing on calls from the last week (AI calls, transfers, office-line calls). */
+export async function syncMissingRecordings({ limit = 15 } = {}) {
+  if (!aiConfigured()) return { synced: 0 };
+  const week = new Date(Date.now() - 7 * 86400000), settled = new Date(Date.now() - 60000);
+  const calls = await M.AiCall.find({ status: 'COMPLETED', createdAt: { $gt: week }, updatedAt: { $lt: settled }, callId: { $not: /^list-/ },
+    $or: [{ recordingId: { $exists: false } }, { recordingId: null }, { 'transfer.status': 'ENDED', 'transfer.recordingId': { $exists: false } }] })
+    .sort({ createdAt: -1 }).limit(limit).lean();
+  let synced = 0;
+  for (const c of calls) if (await ensureAiCallRecording(c)) synced++;
+  const acts = await M.LeadActivity.find({ type: 'CALL', 'bridge.status': 'ENDED', 'bridge.recordingId': { $exists: false }, createdAt: { $gt: week }, updatedAt: { $lt: settled } }).limit(limit);
+  for (const a of acts) {
+    const r = await syncOne(a.bridge.callId, 'bridge');
+    if (r) { a.bridge.recordingId = r.id; a.bridge.recordingDurationSec = r.durationSec; a.markModified('bridge'); await a.save(); synced++; }
+  }
+  return { synced, checked: calls.length + acts.length };
+}
+
+const PROVIDER_NAMES = { rumik: 'Rumik (voice)', sarvam: 'Sarvam (voice)', deepgram: 'Deepgram (listening)', groq: 'Groq (thinking)' };
+
+/**
+ * The voice worker says a provider stopped working mid-call (no balance, bad key). Tell Admin / COO in the app,
+ * at most once an hour per provider, so a silent agent never goes unnoticed.
+ */
+export async function providerAlert(ev) {
+  const provider = PROVIDER_NAMES[ev.provider] ? ev.provider : 'voice';
+  const now = new Date(), key = `aiProviderAlertAt.${provider}`;
+  const r = await M.Setting.updateOne({ key: 'system', $or: [{ [key]: { $exists: false } }, { [key]: { $lt: new Date(now - 3600000) } }] }, { $set: { [key]: now } });
+  if (!r.modifiedCount) return { alerted: false };
+  const admins = await M.User.find({ status: 'ACTIVE', role: { $in: ['ADMIN', 'COO'] } }).distinct('_id');
+  const other = provider === 'rumik' ? ' The agent switches to Sarvam for the rest of the call if a Sarvam key is set.' : provider === 'sarvam' ? ' The agent switches to Rumik if its key works.' : '';
+  note(admins, { title: `AI calls: ${PROVIDER_NAMES[provider] || provider} stopped working`, body: `${String(ev.message || '').slice(0, 200)}. Recharge or check the key.${other}`, link: '/sales?tab=ai' });
+  return { alerted: true };
 }
 
 /** Mirror one AI call to the "AI Calls" sheet tab after the response is sent. */

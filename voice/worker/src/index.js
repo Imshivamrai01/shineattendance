@@ -1,5 +1,6 @@
 import { VoiceSession } from './session.js';
-import { vobizHeaders, crmEvent, keys, dialXml, xml, esc, mediaUrl, sorryXml, targetFor, transcribeTransfer } from './transfer.js';
+import { startBridge, bridgeRoute, bridgeHangup, hangupCall } from './bridge.js';
+import { vobizHeaders, crmEvent, keys, dialXml, xml, sorryXml, targetFor, transcribeTransfer } from './transfer.js';
 
 export { VoiceSession };
 
@@ -28,7 +29,7 @@ async function formOrJson(req) {
 
 /**
  * Dial an Indian mobile for the CRM. Body: { to: "+91XXXXXXXXXX", lead: { id?, name, purpose }, requestedBy,
- * company (what the agent knows about the company), script: { name, kind, opening, instructions, collect } }.
+ * company (what the agent knows about the company), script: { name, kind, opening, instructions, collect }, voice: { provider, sarvamSpeaker } }.
  */
 async function dial(req, env, ctx) {
   const b = await req.json().catch(() => ({}));
@@ -51,6 +52,8 @@ async function dial(req, env, ctx) {
   await setMeta(env, callId, {
     callId, direction: 'outbound', phone: to, leadId: b.lead?.id, leadName: String(b.lead?.name || '').slice(0, 120),
     purpose: String(b.lead?.purpose || '').slice(0, 300), requestedBy: b.requestedBy, company: String(b.company || '').slice(0, 4000),
+    // Voice for this call, chosen in the CRM: provider "auto" | "rumik" | "sarvam" and the Sarvam speaker.
+    voice: b.voice && { provider: ['auto', 'rumik', 'sarvam'].includes(b.voice.provider) ? b.voice.provider : 'auto', sarvamSpeaker: String(b.voice.sarvamSpeaker || '').replace(/[^a-z_]/g, '').slice(0, 40) },
     script: b.script && {
       name: String(b.script.name || '').slice(0, 60), kind: String(b.script.kind || ''), opening: String(b.script.opening || '').slice(0, 300),
       instructions: String(b.script.instructions || '').slice(0, 3000), collect: String(b.script.collect || '').slice(0, 600),
@@ -61,7 +64,8 @@ async function dial(req, env, ctx) {
 
 // ---- Recordings: VoBiz deletes them after 30 days, so each one is copied into our own R2 bucket ----
 
-const recKey = (env, callId, part = '') => (part === 'transfer' ? keys.transfer(env, callId) : keys.ai(env, callId));
+const recKey = (env, callId, part = '') => (part === 'transfer' ? keys.transfer(env, callId) : part === 'bridge' ? keys.bridge(env, callId) : keys.ai(env, callId));
+const REC_FIELDS = { '': ['recordingKey', 'recordingUrl'], transfer: ['transferRecordingKey', 'transferRecordingUrl'], bridge: ['bridgeRecordingKey', 'bridgeRecordingUrl'] };
 
 /** Copy one recording from VoBiz into R2 (retries while VoBiz is still finalising the file). Returns the R2 key or null. */
 async function archiveRecording(env, callId, url, part = '') {
@@ -78,7 +82,7 @@ async function archiveRecording(env, callId, url, part = '') {
             httpMetadata: { contentType: res.headers.get('content-type') || 'audio/mpeg' },
             customMetadata: { callId, part: part || 'ai', source: 'vobiz', copiedAt: new Date().toISOString() },
           });
-          await setMeta(env, callId, part === 'transfer' ? { transferRecordingKey: key } : { recordingKey: key });
+          await setMeta(env, callId, { [REC_FIELDS[part || ''][0]]: key });
           console.log('recording archived', key, body.byteLength);
           return key;
         }
@@ -87,6 +91,29 @@ async function archiveRecording(env, callId, url, part = '') {
     await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
   }
   return null;
+}
+
+/**
+ * Find a call's recording at VoBiz and keep it (R2), without relying on VoBiz's recording callback, which does not
+ * always arrive. part '' = the AI conversation (the earliest recording on the call), 'transfer' = the part with the
+ * team after a live transfer (the latest), 'bridge' = an office-line call. Returns { found, id, durationSec }.
+ */
+async function syncRecording(req, env) {
+  const b = await req.json().catch(() => ({}));
+  const callId = String(b.callId || ''), part = ['transfer', 'bridge'].includes(b.part) ? b.part : '';
+  if (!SID.test(callId)) return Response.json({ error: 'callId required' }, { status: 400 });
+  const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${env.VOBIZ_AUTH_ID}/Recording/?call_uuid=${encodeURIComponent(callId)}&limit=20`, { headers: vobizHeaders(env) });
+  if (!res.ok) return Response.json({ error: `VoBiz HTTP ${res.status}` }, { status: 502 });
+  const list = ((await res.json()).objects || []).filter((r) => r.call_uuid === callId && r.recording_url)
+    .sort((x, y) => Number(x.recording_start_ms) - Number(y.recording_start_ms));
+  const meta = await getMeta(env, callId);
+  const ID = { '': 'recordingId', transfer: 'transferRecordingId', bridge: 'bridgeRecordingId' }[part];
+  const pick = list.find((r) => r.recording_id === meta[ID])
+    || (part === 'transfer' ? (list.length > 1 ? list[list.length - 1] : null) : part === 'bridge' ? list[list.length - 1] : list.find((r) => r.recording_id !== meta.transferRecordingId));
+  if (!pick) return Response.json({ found: false });
+  await setMeta(env, callId, { [ID]: pick.recording_id, [REC_FIELDS[part][1]]: pick.recording_url });
+  const key = await archiveRecording(env, callId, pick.recording_url, part);
+  return Response.json({ found: true, id: pick.recording_id, durationSec: Math.round(Number(pick.recording_duration_ms) / 1000) || undefined, archived: !!key });
 }
 
 /** "bytes=a-b" / "bytes=a-" / "bytes=-n" -> R2 range option, or undefined. */
@@ -102,10 +129,10 @@ async function recording(req, env, url) {
   const sid = url.searchParams.get('call') || '';
   if (!SID.test(sid)) return new Response('Bad call id', { status: 400 });
   const meta = await getMeta(env, sid);
-  const part = url.searchParams.get('part') === 'transfer' ? 'transfer' : '';
+  const part = ['transfer', 'bridge'].includes(url.searchParams.get('part')) ? url.searchParams.get('part') : '';
   if (env.RECORDINGS) {
     const range = r2Range(req.headers.get('range'));
-    const obj = await env.RECORDINGS.get((part ? meta.transferRecordingKey : meta.recordingKey) || recKey(env, sid, part), range ? { range } : {});
+    const obj = await env.RECORDINGS.get(meta[REC_FIELDS[part][0]] || recKey(env, sid, part), range ? { range } : {});
     if (obj) {
       const headers = new Headers({ 'content-type': obj.httpMetadata?.contentType || 'audio/mpeg', 'accept-ranges': 'bytes', etag: obj.httpEtag });
       if (range && obj.range) {
@@ -119,7 +146,7 @@ async function recording(req, env, url) {
       return new Response(obj.body, { headers });
     }
   }
-  const source = part ? meta.transferRecordingUrl : meta.recordingUrl;
+  const source = meta[REC_FIELDS[part][1]];
   if (!source) return new Response('No recording', { status: 404 });
   const headers = { ...vobizHeaders(env) };
   if (req.headers.get('range')) headers.range = req.headers.get('range');
@@ -135,10 +162,13 @@ export default {
       return Response.json({ ok: true, model: env.GROQ_MODEL, tts: env.RUMIK_MODEL });
     }
 
-    if (url.pathname === '/api/call' || url.pathname === '/api/recording' || url.pathname === '/api/recording/archive') {
+    if (['/api/call', '/api/recording', '/api/recording/archive', '/api/recording/sync', '/api/bridge', '/api/hangup'].includes(url.pathname)) {
       const bearer = (req.headers.get('authorization') || '').replace(/^Bearer /, '');
       if (!sameToken(bearer, env.CRM_WEBHOOK_SECRET || '')) return new Response('Forbidden', { status: 403 });
       if (url.pathname === '/api/call' && req.method === 'POST') return dial(req, env, ctx);
+      if (url.pathname === '/api/bridge' && req.method === 'POST') return startBridge(req, env, { setMeta });
+      if (url.pathname === '/api/hangup' && req.method === 'POST') return hangupCall(req, env);
+      if (url.pathname === '/api/recording/sync' && req.method === 'POST') return syncRecording(req, env);
       if (url.pathname === '/api/recording/archive' && req.method === 'POST') {
         const sid = url.searchParams.get('call') || '';
         if (!SID.test(sid)) return new Response('Bad call id', { status: 400 });
@@ -173,21 +203,29 @@ export default {
       const p = await formOrJson(req);
       console.log('hangup', JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => /CallUUID|Duration|BillDuration|HangupCause|CallStatus|TotalCost|Rate/i.test(k)))));
       const callId = String(p.CallUUID || '');
+      const bmeta = SID.test(callId) ? await getMeta(env, callId) : {};
+      if (bmeta.bridge) { bridgeHangup(env, ctx, callId, bmeta, p); return new Response('OK'); } // office-line call
       // A call that never connected has no session to report it: tell the CRM here.
       if (SID.test(callId) && String(p.CallStatus || '').toLowerCase() !== 'completed') {
-        const meta = await getMeta(env, callId);
+        const meta = bmeta;
         ctx.waitUntil(crmEvent(env, { event: 'call.failed', callId, direction: meta.direction, phone: meta.phone, leadId: meta.leadId, requestedBy: meta.requestedBy, purpose: meta.purpose, hangupCause: p.HangupCause || p.CallStatus }));
       }
       return new Response('OK');
     }
 
+    // ---- Office-line calls (sales person first, then the lead) ----
+    if (['/vobiz/bridge', '/vobiz/bridge-event', '/vobiz/bridge-result', '/vobiz/bridge-recording'].includes(url.pathname)) {
+      if (!authed) return new Response('Forbidden', { status: 403 });
+      return (await bridgeRoute(url, req, env, ctx, { getMeta, setMeta, formOrJson, archiveRecording })) || new Response('Not found', { status: 404 });
+    }
+
     // ---- Live transfer (VoBiz callbacks; the session started it with the Transfer API) ----
 
-    if (url.pathname.startsWith('/vobiz/') && ['/vobiz/transfer', '/vobiz/transfer-result', '/vobiz/transfer-event', '/vobiz/whisper', '/vobiz/media', '/vobiz/transfer-recording'].includes(url.pathname)) {
+    if (url.pathname.startsWith('/vobiz/') && ['/vobiz/transfer', '/vobiz/transfer-result', '/vobiz/transfer-event', '/vobiz/media', '/vobiz/transfer-recording'].includes(url.pathname)) {
       if (!authed) return new Response('Forbidden', { status: 403 });
       const callId = url.searchParams.get('call') || '';
 
-      // Audio files VoBiz plays (whisper for the person, "nobody is free" for the caller).
+      // Audio VoBiz plays to the caller ("nobody is free").
       if (url.pathname === '/vobiz/media') {
         const f = url.searchParams.get('f') || '';
         if (!/^[a-zA-Z0-9-]{1,80}$/.test(f)) return new Response('Bad file', { status: 400 });
@@ -201,11 +239,6 @@ export default {
       const p = req.method === 'POST' ? await formOrJson(req) : {};
 
       if (url.pathname === '/vobiz/transfer') return new Response(dialXml(env, callId, tx, 0, { record: true }), { headers: { 'Content-Type': 'application/xml' } });
-
-      // What the person hears when they pick up, before being connected.
-      if (url.pathname === '/vobiz/whisper') return xml(`
-  <Play>${esc(mediaUrl(env, `${callId}-whisper`))}</Play>
-`);
 
       // B-leg lifecycle: who answered, when they hung up.
       if (url.pathname === '/vobiz/transfer-event') {

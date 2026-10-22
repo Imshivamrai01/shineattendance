@@ -10,7 +10,8 @@ const transferOf = (s) => ({ enabled: s.aiTransferEnabled !== false, mode: s.aiT
 
 async function view(ctx) {
   const s = await getSettings();
-  const out = { companyInfo: s.aiCompanyInfo || '', scripts: await aiScripts({ all: true }), transfer: transferOf(s) };
+  const out = { companyInfo: s.aiCompanyInfo || '', scripts: await aiScripts({ all: true }), transfer: transferOf(s),
+    voice: { provider: s.aiVoiceProvider || 'auto', sarvamSpeaker: s.aiSarvamSpeaker || 'simran_enhi_customer' }, officeLine: s.officeLineEnabled !== false };
   if (ctx.sales === 'MANAGER') {
     // Who the AI may put callers through to (mobile numbers stay masked).
     out.people = (await M.User.find({ status: 'ACTIVE' }).select('name role designation mobile aiTransfer').sort({ name: 1 }).lean())
@@ -25,7 +26,7 @@ export const GET = salesHandler(view);
 const clip = (v, n) => String(v ?? '').trim().slice(0, n);
 
 // { companyInfo, scripts: [{ _id?, name, kind, opening, instructions, collect, active }], transfer: { enabled, mode, ringSec, needCheckIn },
-//   people: { userId: true|false } } — managers only.
+//   people: { userId: true|false }, voice: { provider: auto|rumik|sarvam, sarvamSpeaker } } — managers only.
 export const PUT = salesHandler(async (ctx) => {
   const b = await readJson(ctx.req);
   if (b.companyInfo !== undefined) {
@@ -45,6 +46,13 @@ export const PUT = salesHandler(async (ctx) => {
       aiTransferRingSec: Math.min(45, Math.max(10, Number(t.ringSec) || 20)), aiTransferNeedCheckIn: t.needCheckIn !== false,
     } }, { upsert: true });
   }
+  if (b.voice && typeof b.voice === 'object') {
+    await M.Setting.updateOne({ key: 'system' }, { $set: {
+      aiVoiceProvider: ['auto', 'rumik', 'sarvam'].includes(b.voice.provider) ? b.voice.provider : 'auto',
+      aiSarvamSpeaker: /^[a-z_]{3,40}$/.test(b.voice.sarvamSpeaker || '') ? b.voice.sarvamSpeaker : 'simran_enhi_customer',
+    } }, { upsert: true });
+  }
+  if (typeof b.officeLine === 'boolean') await M.Setting.updateOne({ key: 'system' }, { $set: { officeLineEnabled: b.officeLine } }, { upsert: true });
   if (b.people && typeof b.people === 'object') {
     const on = Object.keys(b.people).filter((id) => b.people[id] === true && /^[a-f\d]{24}$/i.test(id));
     const off = Object.keys(b.people).filter((id) => b.people[id] === false && /^[a-f\d]{24}$/i.test(id));

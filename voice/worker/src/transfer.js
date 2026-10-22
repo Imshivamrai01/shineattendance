@@ -1,5 +1,14 @@
 // Live transfer helpers shared by the worker routes (VoBiz callbacks) and the call session (which decides to transfer).
 
+/** Groq request fields that switch "thinking" off (or down) for each model family: every 100 ms counts on a call. */
+export function fastParams(model) {
+  if (/gpt-oss/.test(model)) return { reasoning_effort: 'low', include_reasoning: false };
+  if (/qwen3/.test(model)) return { reasoning_effort: 'none' };
+  return {};
+}
+/** Model for after-call work (summary, extraction): accuracy over speed. */
+export const extractModel = (env) => env.EXTRACT_MODEL || 'openai/gpt-oss-120b';
+
 export const vobizHeaders = (env) => ({ 'X-Auth-ID': env.VOBIZ_AUTH_ID, 'X-Auth-Token': env.VOBIZ_AUTH_TOKEN });
 export const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const crmBase = (env) => (env.CRM_WEBHOOK_URL ? new URL(env.CRM_WEBHOOK_URL).origin : '');
@@ -33,6 +42,7 @@ export async function ttsMp3(env, text) {
 export const keys = {
   ai: (env, id) => `${env.RECORDINGS_PREFIX || 'calls'}/${id}.mp3`,
   transfer: (env, id) => `${env.RECORDINGS_PREFIX || 'calls'}/${id}-transfer.mp3`,
+  bridge: (env, id) => `${env.RECORDINGS_PREFIX || 'calls'}/office/${id}.mp3`,
   media: (env, name) => `${env.RECORDINGS_PREFIX || 'calls'}/media/${name}.mp3`,
 };
 
@@ -53,6 +63,8 @@ const cb = (env, path, callId, extra = '') => `${env.PUBLIC_URL}${path}?call=${e
 /**
  * XML for the caller's leg: start recording the whole transferred conversation (first attempt only), then ring the
  * person(s). One at a time ("SEQUENTIAL": target i, the action URL moves on to i + 1) or everyone at once ("ALL").
+ * No confirmSound whisper: on VoBiz it turns into a confirmation gate that hangs the person up after confirmTimeout
+ * (seen live: "Scheduled Hangup" 8 s after answering). The person gets the summary as a CRM notification instead.
  */
 export function dialXml(env, callId, tx, i, { record }) {
   const targets = tx.mode === 'ALL' ? tx.targets : [tx.targets[i]];
@@ -61,7 +73,6 @@ export function dialXml(env, callId, tx, i, { record }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>${rec}
   <Dial callerId="${esc(env.VOBIZ_NUMBER)}" timeout="${Number(tx.ringSec) || 20}" timeLimit="3600"
-        confirmSound="${esc(cb(env, '/vobiz/whisper', callId))}" confirmTimeout="8"
         action="${esc(cb(env, '/vobiz/transfer-result', callId, `&i=${i}`))}" method="POST"
         callbackUrl="${esc(cb(env, '/vobiz/transfer-event', callId))}" callbackMethod="POST">
     ${targets.map((x) => `<Number>${esc(x.phone)}</Number>`).join('\n    ')}
@@ -108,7 +119,7 @@ export async function transcribeTransfer(env, audio, context) {
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: env.GROQ_MODEL, temperature: 0, reasoning_effort: 'low', include_reasoning: false, response_format: { type: 'json_object' },
+      body: JSON.stringify({ model: extractModel(env), temperature: 0, ...fastParams(extractModel(env)), response_format: { type: 'json_object' },
         messages: [{ role: 'system', content: TX_SUMMARY_PROMPT }, { role: 'user', content: `${context}\n\n${labelled}` }] }),
       signal: AbortSignal.timeout(30000),
     });

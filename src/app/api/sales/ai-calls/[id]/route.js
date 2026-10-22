@@ -1,10 +1,12 @@
 import { readJson } from '@/lib/http';
 import { salesHandler, logActivity } from '@/lib/sales';
-import { queueAiCallSync, loadAiCall } from '@/lib/aiCalls';
+import { queueAiCallSync, loadAiCall, ensureAiCallRecording } from '@/lib/aiCalls';
 
 // One AI call with its transcript.
 export const GET = salesHandler(async (ctx) => {
-  const call = await loadAiCall(ctx);
+  let call = await loadAiCall(ctx);
+  // Opening a call fetches its recording from VoBiz if the "ready" callback never came.
+  if (await ensureAiCallRecording(call.toObject())) call = await loadAiCall(ctx);
   await call.populate([{ path: 'lead', select: 'name phone status assignedTo nextFollowUpAt' }, { path: 'requestedBy', select: 'name' }, { path: 'handledBy', select: 'name' }, { path: 'transfer.to', select: 'name' }]);
   const out = call.toObject();
   delete out.recordingUrl; // the browser plays it through /recording, never from the carrier directly

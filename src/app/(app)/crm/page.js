@@ -6,7 +6,7 @@ import { CrmAiCalls } from '@/components/AiPortal';
 
 const CHUNK = 20;
 const fill = (text, params) => text.replace(/\{\{(\d+)\}\}/g, (_, n) => params[n - 1] || `{{${n}}}`);
-const tone = (s) => ({ APPROVED: 'ok', SENT: 'ok', PENDING: 'warn', IN_APPEAL: 'warn', REJECTED: 'bad', FAILED: 'bad', PAUSED: 'bad', DISABLED: 'bad' }[s] || '');
+const tone = (s) => ({ APPROVED: 'ok', SENT: 'ok', DELIVERED: 'ok', READ: 'ok', RECEIVED: 'warn', PENDING: 'warn', IN_APPEAL: 'warn', REJECTED: 'bad', FAILED: 'bad', PAUSED: 'bad', DISABLED: 'bad' }[s] || '');
 
 // "Name, 98xxxxxxxx" per line (comma, tab or several spaces between them; a bare number is fine too).
 function parseList(text) {
@@ -18,7 +18,7 @@ function parseList(text) {
 }
 
 function Connect({ d, onSaved }) {
-  const [f, setF] = useState({ phoneId: d.phoneId, businessId: d.businessId, token: '' });
+  const [f, setF] = useState({ phoneId: d.phoneId, businessId: d.businessId, token: '', appSecret: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -37,10 +37,35 @@ function Connect({ d, onSaved }) {
         <Field label="Access token" span hint={d.hasToken ? 'A token is saved. Leave blank to keep it.' : undefined}>
           <textarea rows={2} value={f.token} onChange={set('token')} placeholder={d.hasToken ? '•••••••• (saved)' : 'Paste the token'} autoComplete="off" spellCheck={false} />
         </Field>
+        <Field label="App secret (optional)" span hint={d.webhook?.hasAppSecret ? 'Saved. Leave blank to keep it.' : 'App settings → Basic → App secret. Lets the app check that webhook calls really come from Meta.'}>
+          <input value={f.appSecret} onChange={set('appSecret')} placeholder={d.webhook?.hasAppSecret ? '•••••••• (saved)' : ''} autoComplete="off" spellCheck={false} />
+        </Field>
       </div>
+      {d.webhook && <Webhook w={d.webhook} />}
       {err && <div className="alert" style={{ marginTop: 10 }}>{err}</div>}
       <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}><button className="btn primary" disabled={busy}>{busy ? 'Checking…' : 'Save and check'}</button></div>
     </form>
+  );
+}
+
+// What to type into Meta → WhatsApp → Configuration → Webhook.
+function Webhook({ w }) {
+  const [copied, setCopied] = useState('');
+  const copy = (k, v) => navigator.clipboard?.writeText(v).then(() => { setCopied(k); setTimeout(() => setCopied(''), 1500); });
+  const row = (k, label, v) => (
+    <Field label={label} span>
+      <div className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>
+        <input readOnly value={v} onFocus={(e) => e.target.select()} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13 }} />
+        <button type="button" className="btn sm" onClick={() => copy(k, v)}>{copied === k ? 'Copied' : 'Copy'}</button>
+      </div>
+    </Field>
+  );
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+      <h3 style={{ margin: '0 0 4px' }}>Webhook (delivery ticks and replies)</h3>
+      <p className="muted small" style={{ marginTop: 0 }}>Meta for Developers → your app → WhatsApp → Configuration → Webhook → Edit. Paste these two, press Verify and save, then subscribe to <b>messages</b>.</p>
+      <div className="form">{row('url', 'Callback URL', w.callbackUrl)}{row('token', 'Verify token', w.verifyToken)}</div>
+    </div>
   );
 }
 
@@ -238,12 +263,13 @@ export default function Crm() {
 
           {tab === 'history' && (
             <div className="card">
-              <h2>Last 100 messages</h2>
+              <h2>Last 100 messages and replies</h2>
               {!d.history.length && <p className="muted">Nothing sent yet.</p>}
               {d.history.map((m) => (
                 <div key={m._id} className="row between wa-row">
-                  <span>{m.name || m.to} <span className="muted small">{m.to} · {m.template} · {fmtDateTime(m.createdAt)}</span>{m.error && <div className="muted small">{m.error}</div>}</span>
-                  <Badge tone={tone(m.status)}>{m.status === 'SENT' ? 'Sent' : 'Failed'}</Badge>
+                  <span>{m.direction === 'IN' && '↩ '}{m.name || m.to} <span className="muted small">{m.to} · {m.direction === 'IN' ? 'reply' : m.template} · {fmtDateTime(m.createdAt)}</span>
+                    {m.text && <div className="small">{m.text}</div>}{m.error && <div className="muted small">{m.error}</div>}</span>
+                  <Badge tone={tone(m.status)}>{{ SENT: 'Sent', DELIVERED: 'Delivered', READ: 'Read', FAILED: 'Failed', RECEIVED: 'Reply' }[m.status] || m.status}</Badge>
                 </div>))}
             </div>
           )}

@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { api, fmtDateTime } from '@/lib/client';
 import { useLive } from '@/lib/useLive';
 import { Badge, Field, Skeleton, Empty } from '@/components/ui';
-import { STATUS, GRADE, CATEGORY_HINTS, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, outcomeLabel, when, LeadForm } from '@/components/SalesBits';
-import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur } from '@/components/SalesCall';
+import { STATUS, GRADE, CATEGORY_HINTS, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, when, Initials, Clamp, LeadForm } from '@/components/SalesBits';
+import Icon from '@/components/Icon';
+import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur, OfficeCallMedia } from '@/components/SalesCall';
 import { useMe } from '@/components/Shell';
 import { AiPortal } from '@/components/AiPortal';
 
@@ -15,85 +16,137 @@ const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== 
 const dueTone = (d) => { if (!d) return ''; const t = new Date(d); const now = new Date(); return t < now ? (t.toDateString() === now.toDateString() ? 'warn' : 'bad') : ''; };
 
 function activityText(a) {
-  const lead = a.lead?.name ? <Link href={`/sales/leads/${a.lead._id}`}>{a.lead.name}</Link> : 'a lead';
+  const lead = a.lead?.name ? <Link href={`/sales/leads/${a.lead._id}`} className="feed-lead">{a.lead.name}</Link> : 'a lead';
   switch (a.type) {
-    case 'AI_CALL': return <>AI agent called {lead} · <b>{outcomeLabel(a.outcome)}</b>{a.followUpAt ? ` · callback ${fmtDateTime(a.followUpAt)}` : ''}</>;
-    case 'CALL': return <>called {lead} · <b>{outcomeLabel(a.outcome)}</b>{a.followUpAt ? ` · follow-up ${fmtDateTime(a.followUpAt)}` : ''}</>;
-    case 'FOLLOW_UP': return a.followUpAt ? <>set a follow-up for {lead} on {fmtDateTime(a.followUpAt)}</> : <>cleared the follow-up of {lead}</>;
-    case 'STATUS': return <>moved {lead} to <b>{STATUS[a.to]?.[0] || a.to}</b></>;
-    case 'ASSIGN': return <>re-assigned {lead}</>;
-    case 'NOTE': return <>added a note on {lead}</>;
-    case 'CREATED': return <>added {lead}</>;
-    case 'FOUND_AGAIN': return <>found {lead} again (repeat)</>;
-    default: return <>updated {lead}</>;
+    case 'AI_CALL': return <><b>AI agent</b> called {lead}</>;
+    case 'CALL': return <><b>{a.by?.name || 'Someone'}</b> called {lead}</>;
+    case 'FOLLOW_UP': return a.followUpAt ? <><b>{a.by?.name}</b> set a follow-up for {lead}</> : <><b>{a.by?.name}</b> cleared the follow-up of {lead}</>;
+    case 'STATUS': return <><b>{a.by?.name}</b> moved {lead} to</>;
+    case 'ASSIGN': return <><b>{a.by?.name}</b> re-assigned {lead}</>;
+    case 'NOTE': return <><b>{a.by?.name}</b> added a note on {lead}</>;
+    case 'CREATED': return <><b>{a.by?.name}</b> added {lead}</>;
+    case 'FOUND_AGAIN': return <>{lead} was found again</>;
+    default: return <><b>{a.by?.name}</b> updated {lead}</>;
   }
 }
 
+function FeedItem({ a }) {
+  const ai = a.type === 'AI_CALL';
+  const call = ai || a.type === 'CALL';
+  const showNote = a.note && !['CREATED', 'FOUND_AGAIN'].includes(a.type) && !/^Feedback:\s*$/.test(a.note.trim());
+  return (
+    <li className="feed-item">
+      <Initials name={a.by?.name || 'System'} ai={ai} />
+      <div className="feed-body">
+        <div className="feed-line">
+          <span className="feed-text">{activityText(a)}</span>
+          {call && <OutcomeBadge o={a.outcome} />}
+          {a.type === 'STATUS' && <StatusBadge s={a.to} />}
+          {a.type === 'FOUND_AGAIN' && <span className="badge repeat">Repeat</span>}
+        </div>
+        <div className="feed-meta">
+          <span>{when(a.createdAt)}</span>
+          {ai && a.by?.name && <span>started by {a.by.name}</span>}
+          {a.durationSec ? <span>{fmtDur(Math.round(a.durationSec))}</span> : null}
+          {a.followUpAt && <span className="feed-next">{ai ? 'Callback' : 'Follow-up'} {when(a.followUpAt)}</span>}
+        </div>
+        {showNote && <Clamp text={a.note} lines={2} className="feed-note" />}
+      </div>
+    </li>
+  );
+}
+
+const KPI_ICONS = { leads: 'users', called: 'phone', waiting: 'clock', follow: 'bell', today: 'chat', won: 'target' };
+
 function Overview({ d, go }) {
+  const [allFeed, setAllFeed] = useState(false);
   const c = d.counts;
   const pct = c.total ? Math.round((c.called / c.total) * 100) : 0;
-  const stat = (label, value, sub, filter) => (
-    <button className="stat stat-btn" onClick={() => go(filter)} key={label}><span className="muted small">{label}</span><b>{value}</b>{sub && <span className="muted small">{sub}</span>}</button>
+  const kpi = (key, label, value, sub, filter, tone = '') => (
+    <button className={`kpi ${tone}`} onClick={() => go(filter)} key={key}>
+      <span className="kpi-ico"><Icon name={KPI_ICONS[key]} size={18} /></span>
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-value">{value}</span>
+      <span className="kpi-sub">{sub}</span>
+    </button>
   );
+  const statuses = Object.keys(STATUS);
+  const maxStatus = Math.max(1, ...statuses.map((s) => c.status[s] || 0));
+  const gradeTotal = ['HOT', 'WARM', 'COLD'].reduce((a, g) => a + (c.grade[g] || 0), 0);
   return (
-    <>
-      <div className="sales-stats">
-        {stat('Total leads', c.total, `${c.fresh} fresh · ${c.repeat} repeat`, { tab: 'leads' })}
-        {stat('Called', c.called, `${pct}% of leads · ${c.calls} calls`, { tab: 'leads', called: '1' })}
-        {stat('Not called yet', c.notCalled, 'open leads', { tab: 'leads', called: '0', open: '1' })}
-        {stat('Follow-ups today', c.dueToday, c.overdue ? `${c.overdue} overdue` : 'none overdue', { tab: 'followups' })}
-        {stat('Calls today', d.today.calls, `${d.today.connected} talked`, { tab: 'calls' })}
-        {stat('Interested', c.status.INTERESTED || 0, `${c.status.CONVERTED || 0} converted`, { tab: 'leads', status: 'INTERESTED' })}
+    <div className="ov">
+      <div className="kpis">
+        {kpi('leads', 'Total leads', c.total, `${c.fresh} fresh · ${c.repeat} repeat`, { tab: 'leads' })}
+        {kpi('called', 'Called', c.called, `${pct}% of leads · ${c.calls} calls`, { tab: 'leads', called: '1' })}
+        {kpi('waiting', 'Not called yet', c.notCalled, 'open leads waiting', { tab: 'leads', called: '0', open: '1' })}
+        {kpi('follow', 'Follow-ups due', c.dueToday, c.overdue ? `${c.overdue} overdue` : 'nothing overdue', { tab: 'followups' }, c.overdue ? 'alarm' : '')}
+        {kpi('today', 'Calls today', d.today.calls, `${d.today.connected} talked`, { tab: 'calls' })}
+        {kpi('won', 'Interested', c.status.INTERESTED || 0, `${c.status.CONVERTED || 0} converted`, { tab: 'leads', status: 'INTERESTED' }, 'good')}
       </div>
 
-      <div className="cols">
-        <div className="card">
-          <h2>Lead quality</h2>
-          <div className="quality-bar">
+      <div className="ov-pair">
+        <section className="card ov-card">
+          <div className="card-head"><h2>Pipeline</h2><span className="muted small">{c.total} leads</span></div>
+          <ul className="funnel">
+            {statuses.map((s) => (
+              <li key={s}>
+                <button className="funnel-row" onClick={() => go({ tab: 'leads', status: s })}>
+                  <span className="funnel-label">{STATUS[s][0]}</span>
+                  <span className="funnel-track"><span className={`funnel-bar st-${s.toLowerCase()}`} style={{ width: `${((c.status[s] || 0) / maxStatus) * 100}%` }} /></span>
+                  <span className="funnel-n">{c.status[s] || 0}</span>
+                </button>
+              </li>))}
+          </ul>
+        </section>
+
+        <section className="card ov-card">
+          <div className="card-head"><h2>Lead quality</h2><span className="muted small">{gradeTotal} scored</span></div>
+          <div className="quality-bar big" role="img" aria-label={`Hot ${c.grade.HOT || 0}, Warm ${c.grade.WARM || 0}, Cold ${c.grade.COLD || 0}`}>
             {['HOT', 'WARM', 'COLD'].map((g) => (c.grade[g] ? <span key={g} className={`grade-${GRADE[g][1]}`} style={{ flex: c.grade[g] }} /> : null))}
           </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            {['HOT', 'WARM', 'COLD'].map((g) => <button key={g} className="btn sm" onClick={() => go({ tab: 'leads', grade: g, sort: 'score' })}><GradeBadge g={g} /> {c.grade[g] || 0}</button>)}
+          <div className="grade-tiles">
+            {['HOT', 'WARM', 'COLD'].map((g) => (
+              <button key={g} className={`grade-tile gt-${GRADE[g][1]}`} onClick={() => go({ tab: 'leads', grade: g, sort: 'score' })}>
+                <span className="gt-dot" /><span className="gt-label">{GRADE[g][0]}</span>
+                <span className="gt-n">{c.grade[g] || 0}</span>
+                <span className="gt-pct">{gradeTotal ? Math.round(((c.grade[g] || 0) / gradeTotal) * 100) : 0}%</span>
+              </button>))}
           </div>
-          <p className="muted small" style={{ marginBottom: 0 }}>Hot = reachable mobile number, Instagram / website, good ratings, or interested on the call. Calls update the score.</p>
-          <h2 style={{ marginTop: 18 }}>Pipeline</h2>
-          <div className="row">
-            {Object.keys(STATUS).map((s) => <button key={s} className="btn sm" onClick={() => go({ tab: 'leads', status: s })}><StatusBadge s={s} /> {c.status[s] || 0}</button>)}
-          </div>
-        </div>
-
-        <div className="card">
-          <h2>Recent activity</h2>
-          {!d.recent.length && <p className="muted">Nothing yet. Find some leads and start calling.</p>}
-          {d.recent.map((a) => (
-            <div key={a._id} className="wa-row act-row">
-              <span><b>{a.by?.name || 'System'}</b> {activityText(a)}{a.note && a.type !== 'CREATED' && a.type !== 'FOUND_AGAIN' && <div className="muted small">“{a.note}”</div>}</span>
-              <span className="muted small nowrap">{fmtDateTime(a.createdAt)}</span>
-            </div>
-          ))}
-        </div>
+          <p className="muted small ov-help">Hot = reachable mobile number, Instagram or website, good ratings, or interested on a call. Every call updates the score.</p>
+        </section>
       </div>
 
       {d.board && (
-        <div className="card">
-          <h2>Team today</h2>
-          <table>
-            <thead><tr><th>Person</th><th>Leads</th><th>Called</th><th>Calls today</th><th>Follow-ups due</th><th>Interested</th><th>Converted</th></tr></thead>
+        <section className="card">
+          <div className="card-head"><h2>Team today</h2>
+            {d.counts.unassigned > 0 && <button className="btn sm" onClick={() => go({ tab: 'leads', assigned: 'none' })}>{d.counts.unassigned} unassigned leads</button>}</div>
+          <div className="table-wrap"><table className="team-table">
+            <thead><tr><th>Person</th><th className="num">Leads</th><th className="num">Called</th><th className="num">Calls today</th><th className="num">Talked</th><th className="num">Follow-ups due</th><th className="num">Interested</th><th className="num">Converted</th></tr></thead>
             <tbody>
               {d.board.map((u) => (
                 <tr key={u._id}>
-                  <td><button className="linkish" onClick={() => go({ tab: 'leads', assigned: u._id })}><b>{u.name}</b></button> <span className="muted small">{u.sales === 'MANAGER' ? 'Manager' : 'Agent'}</span></td>
-                  <td>{u.leads}</td><td>{u.called}</td>
-                  <td><button className="linkish" onClick={() => go({ tab: 'calls', by: u._id })}>{u.callsToday}</button> <span className="muted small">({u.connectedToday} talked)</span></td>
-                  <td>{u.due ? <Badge tone="warn">{u.due}</Badge> : 0}</td><td>{u.interested}</td><td>{u.converted}</td>
+                  <td><button className="person" onClick={() => go({ tab: 'leads', assigned: u._id })}><Initials name={u.name} size={30} /><span><b>{u.name}</b><span className="muted small">{u.sales === 'MANAGER' ? 'Manager' : 'Agent'}</span></span></button></td>
+                  <td className="num">{u.leads}</td><td className="num">{u.called}</td>
+                  <td className="num"><button className="linkish" onClick={() => go({ tab: 'calls', by: u._id })}>{u.callsToday}</button></td>
+                  <td className="num">{u.connectedToday}</td>
+                  <td className="num">{u.due ? <Badge tone="warn">{u.due}</Badge> : 0}</td><td className="num">{u.interested}</td><td className="num">{u.converted}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
-          {d.counts.unassigned > 0 && <p className="muted small" style={{ marginBottom: 0 }}><button className="linkish" onClick={() => go({ tab: 'leads', assigned: 'none' })}>{d.counts.unassigned} leads</button> are not assigned to anyone.</p>}
-        </div>
+          </table></div>
+        </section>
       )}
-    </>
+
+      <section className="card">
+        <div className="card-head"><h2>Recent activity</h2><button className="btn sm" onClick={() => go({ tab: 'calls' })}>Call log</button></div>
+        {!d.recent.length ? <p className="muted">Nothing yet. Find some leads and start calling.</p> : (
+          <>
+            <ul className="feed">{(allFeed ? d.recent : d.recent.slice(0, 8)).map((a) => <FeedItem key={a._id} a={a} />)}</ul>
+            {d.recent.length > 8 && <button className="btn sm feed-more" onClick={() => setAllFeed(!allFeed)}>{allFeed ? 'Show less' : `Show all ${d.recent.length}`}</button>}
+          </>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -121,18 +174,18 @@ function LeadsTable({ d, preset = {}, fixed = {}, title }) {
 
   return (
     <div className="card">
-      <div className="row between" style={{ marginBottom: 10 }}>
-        <h2 style={{ margin: 0 }}>{title || 'Leads'}{res ? <span className="muted small"> · {res.total}</span> : null}</h2>
+      <div className="card-head">
+        <h2>{title || 'Leads'}{res ? <span className="count-pill">{res.total}</span> : null}</h2>
         <a className="btn sm" href={`/api/sales/export?${qs({ ...f, ...fixed })}`}>Export CSV</a>
       </div>
       {!fixed.due && (
-        <div className="tabs">
+        <div className="pill-tabs">
           {[['', 'All'], ['fresh', 'Fresh'], ['repeat', 'Repeat (found again)']].map(([k, l]) => (
-            <button key={k} className={`btn sm ${f.bucket === k ? 'primary' : ''}`} onClick={() => { setF({ ...f, bucket: k }); setPage(1); }}>{l}{d.counts && k ? ` (${k === 'fresh' ? d.counts.fresh : d.counts.repeat})` : ''}</button>))}
+            <button key={k} className={f.bucket === k ? 'on' : ''} onClick={() => { setF({ ...f, bucket: k }); setPage(1); }}>{l}{d.counts && k ? ` (${k === 'fresh' ? d.counts.fresh : d.counts.repeat})` : ''}</button>))}
         </div>
       )}
       <div className="filters">
-        <input type="search" placeholder="Search name, phone, area, Instagram…" value={f.q} onChange={set('q')} />
+        <label className="search-box"><Icon name="search" size={15} /><input type="search" aria-label="Search leads" placeholder="Search name, phone, area, Instagram…" value={f.q} onChange={set('q')} /></label>
         <select value={f.status} onChange={set('status')}><option value="">Any status</option>{Object.entries(STATUS).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select>
         <select value={f.grade} onChange={set('grade')}><option value="">Any quality</option>{Object.entries(GRADE).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select>
         {d.categories.length > 0 && <select value={f.category} onChange={set('category')}><option value="">Any category</option>{d.categories.map((c) => <option key={c}>{c}</option>)}</select>}
@@ -163,16 +216,21 @@ function LeadsTable({ d, preset = {}, fixed = {}, title }) {
               <tr key={l._id}>
                 {manager && <td className="sel"><input type="checkbox" aria-label={`Select ${l.name}`} checked={!!sel[l._id]} onChange={(e) => setSel({ ...sel, [l._id]: e.target.checked })} /></td>}
                 <td className="c-lead">
-                  <Link href={`/sales/leads/${l._id}`} className="lead-name">{l.name}</Link>
-                  <div className="muted small">{[l.category, l.area || l.city].filter(Boolean).join(' · ')}{l.rating ? ` · ★ ${l.rating} (${l.reviews || 0})` : ''}</div>
-                  <div className="lead-tags"><GradeBadge g={l.grade} score={l.score} /><RepeatBadge n={l.timesFound} /></div>
+                  <div className="lead-cell">
+                    <Initials name={l.name} size={36} />
+                    <div>
+                      <Link href={`/sales/leads/${l._id}`} className="lead-name">{l.name}</Link>
+                      <div className="muted small">{[l.category, l.area || l.city].filter(Boolean).join(' · ')}{l.rating ? ` · ★ ${l.rating} (${l.reviews || 0})` : ''}</div>
+                      <div className="lead-tags"><GradeBadge g={l.grade} score={l.score} /><RepeatBadge n={l.timesFound} /></div>
+                    </div>
+                  </div>
                 </td>
                 <td className="c-phone"><CallButton lead={l} /><ContactLinks lead={l} /></td>
                 <td><StatusBadge s={l.status} /></td>
                 <td className="c-call">
                   {l.callCount ? <>
-                    <div><b>{l.lastCallBy?.name || '—'}</b> <OutcomeBadge o={l.lastOutcome} /></div>
-                    <div className="muted small">{when(l.lastCallAt)} · {l.callCount} call{l.callCount > 1 ? 's' : ''}</div>
+                    <div>{l.lastCallBy?.name && <b>{l.lastCallBy.name}</b>} {l.lastOutcome && <OutcomeBadge o={l.lastOutcome} />}</div>
+                    <div className="muted small">{[l.lastCallAt && when(l.lastCallAt), `${l.callCount} call${l.callCount > 1 ? 's' : ''}`].filter(Boolean).join(' · ')}</div>
                   </> : <span className="muted">Not called</span>}
                 </td>
                 <td>{l.nextFollowUpAt ? <Badge tone={dueTone(l.nextFollowUpAt)}>{when(l.nextFollowUpAt)}</Badge> : <span className="muted">—</span>}</td>
@@ -205,8 +263,8 @@ function CallLog({ d, preset = {} }) {
   useLive(load, 30000);
   return (
     <div className="card">
-      <div className="row between" style={{ marginBottom: 12 }}>
-        <h2 style={{ margin: 0 }}>Call log{res ? <span className="muted small"> · {res.calls.length} calls</span> : null}</h2>
+      <div className="card-head">
+        <h2>Call log{res ? <span className="count-pill">{res.calls.length}</span> : null}</h2>
         <div className="row">
           <input type="date" value={day} max={todayIst()} onChange={(e) => setDay(e.target.value || todayIst())} style={{ width: 'auto' }} />
           {manager && <select value={by} onChange={(e) => setBy(e.target.value)} style={{ width: 'auto' }}><option value="">Everyone</option>{d.team.map((u) => <option key={u._id} value={u._id}>{u.name}</option>)}</select>}
@@ -227,13 +285,13 @@ function CallLog({ d, preset = {} }) {
           <tbody>{res.calls.map((c) => (
             <tr key={c._id}>
               <td className="nowrap">{new Date(c.createdAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}{c.durationSec ? <div className="muted small">{fmtDur(c.durationSec)}</div> : null}</td>
-              <td className="nowrap"><b>{c.by?.name}</b></td>
+              <td className="nowrap"><span className="person"><Initials name={c.by?.name} ai={c.type === 'AI_CALL'} size={28} /><b>{c.type === 'AI_CALL' ? 'AI agent' : c.by?.name}</b></span></td>
               <td className="c-lead">{c.lead ? <Link href={`/sales/leads/${c.lead._id}`} className="lead-name">{c.lead.name}</Link> : '—'}<div className="muted small">{c.phone || c.lead?.phone}</div></td>
               <td>
                 <OutcomeBadge o={c.outcome} />
                 {c.outcome === 'PENDING' && String(c.by?._id) === String(me._id) && c.lead && <div><button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => start(c.lead, c)}>Update</button></div>}
               </td>
-              <td className="small" style={{ minWidth: 180 }}>{c.note || <span className="muted">—</span>}</td>
+              <td className="small c-note">{c.note ? <Clamp text={c.note} lines={2} /> : <span className="muted">—</span>}<OfficeCallMedia a={c} compact /></td>
               <td className="nowrap">{c.followUpAt ? when(c.followUpAt) : <span className="muted">—</span>}</td>
             </tr>))}
           </tbody>
@@ -427,23 +485,28 @@ export default function Sales() {
   const manager = d.role === 'MANAGER';
   const tabs = TABS.filter(([k]) => k !== 'team' || manager);
 
+  const count = { followups: d.counts.dueToday + d.counts.overdue, ai: d.aiCallbacks, leads: d.counts.total };
+
   return (
-    <>
-      <div className="row between" style={{ marginBottom: 14 }}>
-        <div><h1>Sales</h1><div className="muted">{manager ? 'Leads, calls and follow-ups for the whole team' : 'Your leads, calls and follow-ups'}</div></div>
-        <div className="row">
-          <button className="btn" onClick={() => setAdding(true)}>Add lead</button>
-          <button className="btn primary" onClick={() => show('finder')}>Find leads</button>
+    <div className="sales">
+      <header className="page-head">
+        <div>
+          <h1>Sales</h1>
+          <p className="muted">{manager ? 'Leads, calls and follow-ups for the whole team' : 'Your leads, calls and follow-ups'}</p>
         </div>
-      </div>
+        <div className="page-actions">
+          <button className="btn" onClick={() => setAdding(true)}>Add lead</button>
+          <button className="btn primary" onClick={() => show('finder')}><Icon name="target" size={16} /> Find leads</button>
+        </div>
+      </header>
       <PendingCalls pending={d.myPending} />
       {note && <div className="alert ok">{note}</div>}
-      <div className="tabs">
+      <nav className="seg-tabs" aria-label="Sales sections">
         {tabs.map(([k, label]) => (
-          <button key={k} className={`btn sm ${tab === k ? 'primary' : ''}`} onClick={() => { setPreset({}); show(k); }}>
-            {label}{k === 'followups' && d.counts.dueToday + d.counts.overdue > 0 ? ` (${d.counts.dueToday + d.counts.overdue})` : ''}{k === 'ai' && d.aiCallbacks ? ` (${d.aiCallbacks})` : ''}
+          <button key={k} className={tab === k ? 'on' : ''} aria-current={tab === k ? 'page' : undefined} onClick={() => { setPreset({}); show(k); }}>
+            {label}{count[k] > 0 && <span className={`tab-n ${k === 'followups' && d.counts.overdue ? 'hot' : ''}`}>{count[k]}</span>}
           </button>))}
-      </div>
+      </nav>
 
       {tab === 'overview' && <Overview d={d} go={go} />}
       {tab === 'calls' && <CallLog d={d} preset={preset} />}
@@ -455,6 +518,6 @@ export default function Sales() {
 
       {adding && <LeadForm team={d.team} manager={manager} onClose={() => setAdding(false)}
         onDone={(r) => { setAdding(false); setNote(r.repeat ? `“${r.lead.name}” is already in the CRM${r.lead.assignedTo ? ` (handled by ${r.lead.assignedTo.name})` : ''}: marked as a repeat lead, not added again.` : `“${r.lead.name}” added.`); load(); }} />}
-    </>
+    </div>
   );
 }

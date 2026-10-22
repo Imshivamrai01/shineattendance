@@ -1,5 +1,6 @@
 // WhatsApp Cloud API (Meta) for the CRM page: bulk template messages to candidates and employees.
 // WhatsApp only lets a business start a conversation with a pre-approved template, so everything here sends templates.
+import crypto from 'node:crypto';
 import { bad, HttpError } from './errors.js';
 
 const GRAPH = process.env.WHATSAPP_GRAPH_URL || 'https://graph.facebook.com/v21.0'; // the override is for the test suite's mock server
@@ -105,4 +106,59 @@ export async function createPreset(settings, name) {
     method: 'POST',
     body: { name, language: 'en', category: p.category, components: [{ type: 'BODY', text: p.text, example: { body_text: [p.example] } }] },
   });
+}
+
+/* ---------- Meta webhook (delivery ticks and replies) ---------- */
+
+/** Callback URL and verify token for Meta's webhook form. The token is made once and kept in settings. */
+export async function webhookInfo(settings, M, origin) {
+  let token = process.env.WA_VERIFY_TOKEN || settings.waVerifyToken; // the secret wins: that is what the webhook checks first
+  if (!token) {
+    token = `shine-${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+    await M.Setting.updateOne({ key: 'system', waVerifyToken: { $in: [null, ''] } }, { $set: { waVerifyToken: token } });
+    token = (await M.Setting.findOne({ key: 'system' }).select('waVerifyToken').lean()).waVerifyToken;
+  }
+  return { callbackUrl: `${origin}/api/crm/webhook`, verifyToken: token, hasAppSecret: !!settings.waAppSecret };
+}
+
+/** X-Hub-Signature-256 check (only when the app secret is saved). */
+export function signatureOk(secret, raw, header) {
+  if (!secret) return true;
+  const mac = Buffer.from(crypto.createHmac('sha256', secret).update(raw).digest('hex'));
+  const got = Buffer.from(String(header || '').replace(/^sha256=/, ''));
+  return got.length === mac.length && crypto.timingSafeEqual(got, mac);
+}
+
+const STATUS = { delivered: 'DELIVERED', read: 'READ', failed: 'FAILED' };
+const RANK = { SENT: 0, DELIVERED: 1, READ: 2, FAILED: 3 };
+
+/** Apply one webhook delivery: message status updates and incoming replies. */
+export async function ingestWebhook(M, body) {
+  let updated = 0, received = 0;
+  for (const entry of body?.entry || []) {
+    for (const ch of entry.changes || []) {
+      if (ch.field !== 'messages') continue;
+      const v = ch.value || {};
+      for (const st of v.statuses || []) {
+        const next = STATUS[st.status];
+        if (!next || !st.id) continue;
+        const msg = await M.WaMessage.findOne({ waId: st.id });
+        if (!msg) continue;
+        const at = new Date(Number(st.timestamp) * 1000 || Date.now());
+        if (next === 'DELIVERED') msg.deliveredAt ||= at;
+        if (next === 'READ') { msg.readAt ||= at; msg.deliveredAt ||= at; }
+        if (next === 'FAILED') msg.error = friendly(st.errors?.[0]).slice(0, 300);
+        if ((RANK[next] ?? 0) > (RANK[msg.status] ?? 0)) msg.status = next;
+        await msg.save(); updated++;
+      }
+      const names = Object.fromEntries((v.contacts || []).map((c) => [c.wa_id, c.profile?.name]));
+      for (const m of v.messages || []) {
+        if (!m.id || await M.WaMessage.exists({ waId: m.id })) continue; // Meta retries deliveries
+        const text = m.text?.body || m.button?.text || m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || `[${m.type}]`;
+        await M.WaMessage.create({ direction: 'IN', status: 'RECEIVED', to: m.from, name: names[m.from] || '', waId: m.id, text: String(text).slice(0, 4000), purpose: 'REPLY' });
+        received++;
+      }
+    }
+  }
+  return { updated, received };
 }

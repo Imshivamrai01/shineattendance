@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Buffer } from 'node:buffer';
-import { crmPost, ttsMp3, ensureSorry, keys, startVobizTransfer } from './transfer.js';
+import { crmPost, ensureSorry, startVobizTransfer, fastParams, extractModel } from './transfer.js';
 
 /*
  * One live conversation. The browser streams 16 kHz PCM16 mic frames in; we relay them to Deepgram,
@@ -21,6 +21,7 @@ const DG_PARAMS = new URLSearchParams({
   interim_results: 'true', endpointing: '300', utterance_end_ms: '1000', vad_events: 'true', punctuate: 'true', numerals: 'true', // no smart_format: it writes Indian numbers US-style
 });
 const HISTORY_LIMIT = 24;
+
 const LLM_TIMEOUT_MS = 15000;
 const BYTES_PER_MS_24K = 48; // 24 kHz * 2 bytes
 const PHONE_CHUNK = 1920;    // 40 ms of 24 kHz PCM16 per playAudio, small enough for quick barge-in
@@ -28,6 +29,11 @@ const PHONE_CHUNK = 1920;    // 40 ms of 24 kHz PCM16 per playAudio, small enoug
 const TRANSFER_TAG = '[[TRANSFER]]';
 const TRANSFER_RE = /\[\[\s*TRANSFER\s*\]\]/;
 const TRANSFER_RE_ALL = /\[\[\s*TRANSFER\s*\]\]/g;
+const END_TAG = '[[END]]';
+const END_RE = /\[\[\s*END\s*\]\]/;
+const END_RE_ALL = /\[\[\s*END\s*\]\]/g;
+const SILENCE_NUDGE = 'Hello? Kya aap mujhe sun pa rahe hain?';
+const SILENCE_BYE = 'Lagta hai abhi baat nahi ho paa rahi. Main baad mein call karungi. Dhanyavaad!';
 
 const istNow = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -42,6 +48,7 @@ function callContext(meta) {
   lines.push(`Live transfer: if they ask to talk to a person (someone from the team, a manager, "kisi insaan se baat karao"), or you cannot help and they want someone,
 reply with one short sentence such as "Ji, main aapko hamari team se jod rahi hoon, yeh call record ho rahi hai, ek moment." and end that reply with ${TRANSFER_TAG}.
 Use ${TRANSFER_TAG} only in that case, never otherwise.`);
+  lines.push(`Ending the call: when the conversation is over (they said bye, asked not to be called, or everything is settled), say a short goodbye and end that reply with ${END_TAG}. You hang up after it, so use it only for the final goodbye.`);
   return `
 ${lines.join(' ')}`;
 }
@@ -239,7 +246,9 @@ export class VoiceSession extends DurableObject {
           const done = this.active;
           this.active = null;
           this.state('listening');
+          this.agentDoneAt = Date.now();
           if (done.transfer) this.ctx.waitUntil(this.startTransfer());
+          else if (done.end) this.ctx.waitUntil(this.hangup('agent said goodbye'));
         }
         return;
       case 'heard': return this.trimInterrupted(msg.gen, Number(msg.ms) || 0);
@@ -253,12 +262,13 @@ export class VoiceSession extends DurableObject {
     const history = await this.loadHistory();
     const resumed = history.length > 0;
     try {
-      await Promise.all([this.openDeepgram(), this.openRumik()]);
+      await Promise.all([this.openDeepgram(), this.openTts().catch((err) => console.error('tts warm-up', err.message))]);
     } catch (err) {
       return this.fail(err.provider || 'connect', err, err.code || 'connect_failed');
     }
     this.send({ type: 'ready', resumed, turns: history.filter((m) => m.role === 'user').length });
     this.send({ type: 'diag', k: 'providers_connect_ms', v: Date.now() - t0 });
+    if (this.phone) this.watchSilence();
     if (!resumed) {
       // The agent speaks first.
       const text = greeting(this.env, this.meta);
@@ -313,6 +323,8 @@ export class VoiceSession extends DurableObject {
         this.send({ type: 'diag', k: 'first_partial_at', v: now });
       }
       this.lastPartialAt = now;
+      this.heardAt = now;
+      this.nudged = false;
       // The caller started talking over the agent (ignore single-letter noise).
       if (this.active && text.replace(/[^\p{L}\p{N}]/gu, '').length >= 2) this.bargeIn(text);
       const words = m.channel?.alternatives?.[0]?.words;
@@ -352,9 +364,10 @@ export class VoiceSession extends DurableObject {
     return this.active;
   }
 
-  speakFixed(text, { greeting = false } = {}) {
+  speakFixed(text, { greeting = false, end = false } = {}) {
     const r = this.newReply();
     r.greeting = greeting;
+    r.end = end;
     r.text = text;
     r.llmDone = true;
     r.queue.push(text);
@@ -379,8 +392,7 @@ export class VoiceSession extends DurableObject {
           stream: true,
           temperature: 0.5,
           max_completion_tokens: 400,
-          reasoning_effort: 'low',
-          include_reasoning: false,
+          ...fastParams(this.env.GROQ_MODEL),
           messages: [{ role: 'system', content: systemPrompt(this.env, this.meta) }, ...this.history.slice(-HISTORY_LIMIT)],
         }),
       });
@@ -407,21 +419,27 @@ export class VoiceSession extends DurableObject {
           buf += delta;
           // The agent asks for a live transfer with a tag at the end of its reply: never speak it.
           if (TRANSFER_RE.test(buf)) { r.transfer = true; buf = buf.replace(TRANSFER_RE_ALL, ' '); }
+          if (END_RE.test(buf)) { r.end = true; buf = buf.replace(END_RE_ALL, ' '); }
           this.send({ type: 'token', text: delta, gen: r.gen });
-          // Speak each sentence as soon as it is complete.
+          // Speak each sentence as soon as it is complete; the very first one already at its first comma,
+          // so the caller hears the agent start a few hundred ms sooner.
           let m;
-          while ((m = /^([\s\S]*?[.!?।](?:\s|$))/.exec(buf)) || (buf.length > 140 && (m = /^([\s\S]{60,}?[,;:](?:\s))/.exec(buf)))) {
+          while ((m = /^([\s\S]*?[.!?।](?:\s|$))/.exec(buf))
+            || (!r.queued && (m = /^([\s\S]{20,}?[,;:—–](?:\s))/.exec(buf)))
+            || (buf.length > 140 && (m = /^([\s\S]{60,}?[,;:](?:\s))/.exec(buf)))) {
             this.enqueue(r, m[1]);
+            r.queued = true;
             buf = buf.slice(m[1].length);
           }
         }
       }
       if (this.active !== r) return;
       if (TRANSFER_RE.test(r.text)) r.transfer = true;
+      if (END_RE.test(r.text)) r.end = true;
       buf = buf.replace(/\[\[[^\]]*$/, ''); // a tag cut off at the end of the stream
       if (buf.trim()) this.enqueue(r, buf);
       r.llmDone = true;
-      this.history.push({ role: 'assistant', content: r.text.replace(TRANSFER_RE_ALL, '').trim() });
+      this.history.push({ role: 'assistant', content: r.text.replace(TRANSFER_RE_ALL, '').replace(END_RE_ALL, '').trim() });
       r.historyIndex = this.history.length - 1;
       await this.saveHistory();
       if (!r.queue.length && !this.utter) this.finishAudio(r);
@@ -443,7 +461,34 @@ export class VoiceSession extends DurableObject {
     if (!this.utter) this.pumpTts(r);
   }
 
-  // ---- Rumik TTS over one warm socket, one utterance at a time ----
+  // ---- Speech: Rumik or Sarvam (Bulbul), one warm socket, one utterance at a time ----
+
+  /**
+   * Which voice to use: the one chosen in the CRM for this call (meta.voice.provider), else TTS_PROVIDER, else Rumik.
+   * A provider that failed with a balance / key error during this call is skipped, so the call never goes silent
+   * while the other one has a key.
+   */
+  ttsProvider() {
+    const want = this.meta?.voice?.provider || this.env.TTS_PROVIDER || 'auto';
+    const has = { rumik: !!this.env.RUMIK_API_KEY, sarvam: !!this.env.SARVAM_API_KEY };
+    const order = want === 'sarvam' ? ['sarvam', 'rumik'] : ['rumik', 'sarvam'];
+    return order.find((x) => has[x] && !this.ttsDown?.[x]) || order.find((x) => has[x]) || 'rumik';
+  }
+
+  /** A provider can't speak for the rest of this call (no balance, bad key): stop using it and tell the CRM once. */
+  ttsFailed(provider, message) {
+    this.ttsDown = { ...(this.ttsDown || {}), [provider]: true };
+    console.error('tts down', provider, message);
+    if (provider === 'rumik') { try { this.rumik?.close(1000); } catch {} this.rumik = null; }
+    if (provider === 'sarvam') { try { this.sarvam?.close(1000); } catch {} this.sarvam = null; }
+    crmPost(this.env, '/api/ai/webhook', { event: 'provider.alert', provider, message: String(message).slice(0, 300) });
+  }
+
+  async openTts() {
+    const provider = this.ttsProvider();
+    if (provider === 'sarvam') await this.openSarvam(); else await this.openRumik();
+    return provider;
+  }
 
   async openRumik() {
     if (this.rumik?.readyState === WebSocket.OPEN) return;
@@ -456,7 +501,7 @@ export class VoiceSession extends DurableObject {
     if (!mint.ok) {
       const err = new Error(`Rumik session HTTP ${mint.status}`);
       err.provider = 'rumik';
-      err.code = mint.status === 401 || mint.status === 403 ? 'expired_key' : 'connect_failed';
+      err.code = mint.status === 401 || mint.status === 403 ? 'expired_key' : mint.status === 402 ? 'no_balance' : 'connect_failed';
       throw err;
     }
     const { ws_url, token } = await mint.json();
@@ -485,51 +530,124 @@ export class VoiceSession extends DurableObject {
   }
 
   onRumik(data) {
-    if (typeof data !== 'string') {
-      const r = this.active;
-      if (!r || !this.utter || this.utter.gen !== r.gen || this.utter.cancelled) return; // stale audio after a cancel
-      if (!r.firstAudio) {
-        r.firstAudio = true;
-        this.state('speaking');
-        r.audioStartWall = Date.now();
-        this.send({ type: 'audio_start', gen: r.gen });
-        this.send({ type: 'diag', k: 'first_audio_at', v: Date.now(), gen: r.gen });
-      }
-      r.audioMs += data.byteLength / BYTES_PER_MS_24K;
-      this.sendAudio(data);
-      return;
-    }
+    if (typeof data !== 'string') return this.onTtsAudio(data);
     let f;
     try { f = JSON.parse(data); } catch { return; }
     if (f.type === 'done' || f.type === 'cancelled') this.settleUtter(f.type);
     else if (f.type === 'error' || f.error) {
-      this.fail('rumik', new Error(f.message || f.error?.message || JSON.stringify(f).slice(0, 200)));
-      this.settleUtter('error');
+      const message = f.message || f.error?.message || f.error || JSON.stringify(f).slice(0, 200);
+      this.fail('rumik', new Error(message));
+      this.settleUtter('error', { provider: 'rumik', message: String(message) });
     }
   }
 
-  settleUtter(how) {
+  /** Sarvam Bulbul streaming: header auth, a config message, then text + flush per utterance; audio arrives as base64. */
+  async openSarvam() {
+    if (this.sarvam?.readyState === WebSocket.OPEN) return;
+    const model = this.env.SARVAM_MODEL || 'bulbul:v4-flash';
+    const res = await fetch(`https://api.sarvam.ai/text-to-speech/ws?model=${encodeURIComponent(model)}&send_completion_event=true`, {
+      headers: { Upgrade: 'websocket', 'Api-Subscription-Key': this.env.SARVAM_API_KEY },
+    });
+    if (!res.webSocket) {
+      const err = new Error(`Sarvam socket refused (HTTP ${res.status})`);
+      err.provider = 'sarvam';
+      err.code = res.status === 401 || res.status === 403 ? 'expired_key' : res.status === 402 || res.status === 429 ? 'no_balance' : 'connect_failed';
+      throw err;
+    }
+    const ws = res.webSocket;
+    ws.accept();
+    this.sarvam = ws;
+    this.sarvamCarry = null;
+    ws.send(JSON.stringify({ type: 'config', data: {
+      language_code: this.env.SARVAM_LANGUAGE || 'hi-IN',
+      speaker: this.meta?.voice?.sarvamSpeaker || this.env.SARVAM_SPEAKER || 'simran_enhi_customer',
+      speech_sample_rate: '24000', output_audio_codec: 'linear16', pace: Number(this.env.SARVAM_PACE) || 1.05,
+      min_buffer_size: 30, max_chunk_length: 250,
+    } }));
+    clearInterval(this.sarvamPing);
+    this.sarvamPing = setInterval(() => { try { if (this.sarvam === ws) ws.send(JSON.stringify({ type: 'ping' })); } catch {} }, 25000);
+    ws.addEventListener('message', (e) => {
+      if (typeof e.data !== 'string') return;
+      let f;
+      try { f = JSON.parse(e.data); } catch { return; }
+      if (f.type === 'audio' && f.data?.audio) {
+        let b = Buffer.from(f.data.audio, 'base64');
+        // linear16 should be raw PCM; strip a WAV header if one comes along anyway.
+        if (b.length > 44 && b.toString('ascii', 0, 4) === 'RIFF') { const i = b.indexOf('data'); if (i > 0) b = b.subarray(i + 8); }
+        if (this.sarvamCarry) { b = Buffer.concat([this.sarvamCarry, b]); this.sarvamCarry = null; }
+        if (b.length % 2) { this.sarvamCarry = b.subarray(b.length - 1); b = b.subarray(0, b.length - 1); }
+        if (b.length) this.onTtsAudio(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+      } else if (f.type === 'event' && f.data?.event_type === 'final') {
+        this.settleUtter('done');
+      } else if (f.type === 'error') {
+        const message = f.data?.message || JSON.stringify(f).slice(0, 200);
+        this.fail('sarvam', new Error(message));
+        this.settleUtter('error', { provider: 'sarvam', message: String(message) });
+      }
+    });
+    ws.addEventListener('close', (e) => {
+      if (this.sarvam !== ws) return;
+      clearInterval(this.sarvamPing);
+      this.sarvam = null;
+      // 4xxx closes are the API refusing us (quota, auth): treat like an error so the other provider takes over.
+      if (e.code >= 4000) this.settleUtter('error', { provider: 'sarvam', message: `closed ${e.code} ${e.reason || ''}` });
+      else this.settleUtter('closed');
+    });
+  }
+
+  /** 24 kHz PCM16 from whichever provider: forward it unless it belongs to a cancelled utterance. */
+  onTtsAudio(data) {
+    const r = this.active;
+    if (!r || !this.utter || this.utter.gen !== r.gen || this.utter.cancelled) return; // stale audio after a cancel
+    if (!r.firstAudio) {
+      r.firstAudio = true;
+      this.state('speaking');
+      r.audioStartWall = Date.now();
+      this.send({ type: 'audio_start', gen: r.gen });
+      this.send({ type: 'diag', k: 'first_audio_at', v: Date.now(), gen: r.gen });
+    }
+    r.audioMs += data.byteLength / BYTES_PER_MS_24K;
+    this.sendAudio(data);
+  }
+
+  settleUtter(how, error) {
     const u = this.utter;
     if (!u) return;
     this.utter = null;
-    u.resolve(how);
+    u.resolve({ how, error });
   }
 
   async pumpTts(r) {
+    const FATAL = /balance|insufficient|quota|credit|unauthori|forbidden|expired|invalid.*key|no_balance|expired_key|40[123]|closed 4/i;
+    let retries = 0;
     while (this.active === r && r.queue.length) {
       const text = r.queue.shift();
+      let provider;
       try {
-        await this.openRumik();
+        provider = await this.openTts();
       } catch (err) {
-        this.fail('rumik', err, err.code);
+        // Out of balance / bad key: switch to the other provider for the rest of the call when there is one.
+        if (FATAL.test(`${err.code} ${err.message}`) && retries++ < 2) { this.ttsFailed(err.provider || this.ttsProvider(), err.message); r.queue.unshift(text); continue; }
+        this.fail(err.provider || 'tts', err, err.code);
         break;
       }
-      const done = new Promise((resolve) => { this.utter = { gen: r.gen, resolve, cancelled: false }; });
-      const payload = { text };
-      if (this.env.RUMIK_MODEL === 'mulberry' && this.env.RUMIK_DESCRIPTION) payload.description = this.env.RUMIK_DESCRIPTION;
-      if (this.env.RUMIK_SPEAKER) payload.speaker = this.env.RUMIK_SPEAKER;
-      this.rumik.send(JSON.stringify(payload));
-      await done;
+      const done = new Promise((resolve) => { this.utter = { gen: r.gen, resolve, cancelled: false, provider }; });
+      if (provider === 'sarvam') {
+        this.sarvam.send(JSON.stringify({ type: 'text', data: { text } }));
+        this.sarvam.send(JSON.stringify({ type: 'flush' }));
+      } else {
+        const payload = { text };
+        if (this.env.RUMIK_MODEL === 'mulberry' && this.env.RUMIK_DESCRIPTION && !this.env.RUMIK_SPEAKER) payload.description = this.env.RUMIK_DESCRIPTION;
+        if (this.env.RUMIK_SPEAKER) payload.speaker = this.env.RUMIK_SPEAKER;
+        this.rumik.send(JSON.stringify(payload));
+      }
+      const { how, error } = await done;
+      if (how === 'error' && error && FATAL.test(error.message) && retries++ < 2) {
+        // Say the same sentence again with the other provider.
+        this.ttsFailed(provider, error.message);
+        r.queue.unshift(text);
+        continue;
+      }
       if (this.active === r) r.spoken.push(text);
     }
     if (this.active === r && r.llmDone && !r.queue.length) this.finishAudio(r);
@@ -540,7 +658,9 @@ export class VoiceSession extends DurableObject {
     if (!r.firstAudio) {
       this.active = null;
       this.state('listening');
+      this.agentDoneAt = Date.now();
       if (r.transfer) this.ctx.waitUntil(this.startTransfer());
+      else if (r.end) this.ctx.waitUntil(this.hangup('agent said goodbye'));
     }
   }
 
@@ -555,7 +675,14 @@ export class VoiceSession extends DurableObject {
     r.queue.length = 0;
     if (this.utter && this.utter.gen === r.gen) {
       this.utter.cancelled = true;
-      try { this.rumik?.send(JSON.stringify({ type: 'cancel' })); } catch { this.settleUtter('cancelled'); }
+      if (this.utter.provider === 'sarvam') {
+        const ws = this.sarvam;
+        this.sarvam = null;
+        try { ws?.close(1000); } catch {}
+        this.settleUtter('cancelled');
+      } else {
+        try { this.rumik?.send(JSON.stringify({ type: 'cancel' })); } catch { this.settleUtter('cancelled'); }
+      }
     }
     this.interrupted = { gen: r.gen, text: r.text, audioMs: r.audioMs, historyIndex: r.historyIndex, at: this.history?.length ?? 0, audioStartWall: r.audioStartWall };
     this.send({ type: 'barge_in', gen: r.gen, t: Date.now(), heard: heardText.slice(0, 120) });
@@ -578,24 +705,54 @@ export class VoiceSession extends DurableObject {
     this.send({ type: 'diag', k: 'heard_ms', v: Math.round(heardMs), gen });
   }
 
+  // ---- ending calls: silence and goodbye ----
+
+  /**
+   * Phone calls only: if the caller says nothing for SILENCE_SEC after the agent stopped talking, ask once whether
+   * they can hear; if still nothing, say goodbye and hang up. Keeps a silent line (or a machine) from holding the
+   * call list until the time limit.
+   */
+  watchSilence() {
+    clearInterval(this.silenceTimer);
+    const limit = (Number(this.env.SILENCE_SEC) || 15) * 1000;
+    this.heardAt = Date.now();
+    this.agentDoneAt = Date.now();
+    this.silenceTimer = setInterval(async () => {
+      if (this.ending || this.transferring || this.active || this.utter || !this.phone) return;
+      if (this.finalParts.length || Date.now() - (this.lastPartialAt || 0) < 3000) return; // the caller is mid-sentence
+      const quiet = Date.now() - Math.max(this.heardAt || 0, this.agentDoneAt || 0);
+      if (quiet < limit) return;
+      await this.loadHistory();
+      const text = this.nudged ? SILENCE_BYE : SILENCE_NUDGE;
+      this.history.push({ role: 'assistant', content: text });
+      await this.saveHistory();
+      this.speakFixed(text, { end: this.nudged });
+      this.nudged = true;
+    }, 2000);
+  }
+
+  /** End the phone call from our side (VoBiz hang-up API). The stream closing then saves and reports the call. */
+  async hangup(reason) {
+    const callId = this.phone?.callId;
+    if (!callId || this.hungUp) return;
+    this.hungUp = true;
+    clearInterval(this.silenceTimer);
+    await new Promise((r) => setTimeout(r, 600)); // let the last words finish playing on the line
+    try {
+      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${this.env.VOBIZ_AUTH_ID}/Call/${callId}/`, {
+        method: 'DELETE', headers: { 'X-Auth-ID': this.env.VOBIZ_AUTH_ID, 'X-Auth-Token': this.env.VOBIZ_AUTH_TOKEN },
+      });
+      console.log('hangup', callId, reason, res.status);
+    } catch (err) { console.error('hangup', callId, err.message); }
+  }
+
   // ---- live transfer to a person ----
 
-  /** One sentence the person hears before being connected: who is calling and what they want. */
-  async whisperText() {
-    const who = this.meta?.leadName || this.meta?.phone || 'ek caller';
-    const lastAsk = [...(this.history || [])].reverse().find((m) => m.role === 'user')?.content || '';
-    try {
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST', headers: { Authorization: `Bearer ${this.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.env.GROQ_MODEL, temperature: 0.2, max_completion_tokens: 120, reasoning_effort: 'low', include_reasoning: false,
-          messages: [{ role: 'system', content: 'Write one short Hinglish sentence (Latin script) for a team member who is about to take this call from an AI agent: who is calling and what they want. No greeting, no markdown.' },
-            { role: 'user', content: `Caller: ${who}.\n${(this.history || []).slice(-10).map((m) => `${m.role === 'user' ? 'Caller' : 'Agent'}: ${m.content}`).join('\n')}` }] }),
-        signal: AbortSignal.timeout(4000),
-      });
-      const line = (await res.json()).choices?.[0]?.message?.content?.trim();
-      if (line) return `AI call se transfer. ${line}`;
-    } catch (err) { console.error('whisper summary', err.message); }
-    return `AI call se transfer. ${who}${lastAsk ? `: ${lastAsk.slice(0, 160)}` : ''}`;
+  /** Instant one-liner for the person's notification: who is calling and their last request. */
+  quickSummary() {
+    const who = this.meta?.leadName || this.meta?.phone || 'A caller';
+    const asks = (this.history || []).filter((m) => m.role === 'user').slice(-2).map((m) => m.content).join(' / ');
+    return `${who}${asks ? `: ${asks.slice(0, 200)}` : ''}`;
   }
 
   /** The caller asked for a person: find who is free (CRM), prepare the whisper, and hand the call to VoBiz. */
@@ -620,11 +777,10 @@ export class VoiceSession extends DurableObject {
       return fallBack(answer?.reason || (answer ? 'nobody available right now' : 'could not reach the CRM'),
         'Maaf kijiye, abhi team mein koi free nahi hai. Main aapka callback note kar leti hoon. Aapko kab call karna theek rahega?');
     }
-    const whisper = await this.whisperText();
-    try {
-      await this.env.RECORDINGS.put(keys.media(this.env, `${callId}-whisper`), await ttsMp3(this.env, whisper), { httpMetadata: { contentType: 'audio/mpeg' } });
-      await ensureSorry(this.env);
-    } catch (err) { console.error('transfer audio', err.message); }
+    // The caller is waiting in silence from here on: only quick steps before ringing. The summary for the person
+    // goes in their CRM notification (a spoken whisper made VoBiz hang them up, see dialXml).
+    const whisper = this.quickSummary();
+    try { await ensureSorry(this.env); } catch (err) { console.error('transfer audio', err.message); }
     const tx = { targets, mode: answer.mode, ringSec: answer.ringSec, whisperText: whisper, startedAt: Date.now() };
     this.meta = { ...((await this.ctx.storage.get('meta')) || this.meta), transfer: tx };
     await this.ctx.storage.put('meta', this.meta);
@@ -684,7 +840,7 @@ export class VoiceSession extends DurableObject {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: this.env.GROQ_MODEL, temperature: 0, reasoning_effort: 'low', include_reasoning: false, response_format: { type: 'json_object' },
+        model: extractModel(this.env), temperature: 0, ...fastParams(extractModel(this.env)), response_format: { type: 'json_object' },
         messages: [{ role: 'system', content: EXTRACT_PROMPT }, { role: 'user', content: `Call type: ${this.meta?.script?.name || 'Sales / reception'}${this.meta?.script?.collect ? ` (to find out: ${this.meta.script.collect})` : ''}. Call time: ${this.meta?.startedAt || ''} (now ${istNow()} India).\n\n${lines}` }],
       }),
       signal: AbortSignal.timeout(30000),
@@ -728,11 +884,14 @@ export class VoiceSession extends DurableObject {
 
   teardown(reason) {
     this.ending = true;
+    clearInterval(this.silenceTimer);
     clearInterval(this.dgKeepAlive);
     if (this.active) { this.active.abort.abort(reason); this.active = null; }
     this.settleUtter('closed');
     try { this.dg?.send(JSON.stringify({ type: 'CloseStream' })); this.dg?.close(1000); } catch {}
     try { this.rumik?.send(JSON.stringify({ type: 'close' })); this.rumik?.close(1000); } catch {}
+    try { clearInterval(this.sarvamPing); this.sarvam?.close(1000); } catch {}
+    this.sarvam = null;
     this.dg = null;
     this.rumik = null;
     this.resetTurn();

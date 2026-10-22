@@ -32,7 +32,8 @@ const UserSchema = new Schema({
   statusReason: String,
   // Sales page: AGENT works the leads assigned to them, MANAGER sees and assigns every lead (Admin / COO always can).
   salesAccess: { type: String, enum: ['NONE', 'AGENT', 'MANAGER'], default: 'NONE' },
-  aiTransfer: { type: Boolean, default: false }, // the AI agent may put live callers through to this person's mobile
+  aiTransfer: { type: Boolean, default: false },
+  callMobile: { type: String, trim: true }, // the phone office-line calls ring first (set by the person; falls back to `mobile`) // the AI agent may put live callers through to this person's mobile
   createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 

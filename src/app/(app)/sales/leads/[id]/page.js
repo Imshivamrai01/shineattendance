@@ -6,8 +6,8 @@ import { api, fmtDateTime, toLocalInput } from '@/lib/client';
 import { useLive } from '@/lib/useLive';
 import { useMe } from '@/components/Shell';
 import { Field, Skeleton } from '@/components/ui';
-import { STATUS, OUTCOMES, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, when, LeadForm } from '@/components/SalesBits';
-import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur } from '@/components/SalesCall';
+import { STATUS, OUTCOMES, StatusBadge, GradeBadge, RepeatBadge, OutcomeBadge, when, Initials, Clamp, LeadForm } from '@/components/SalesBits';
+import { CallButton, ContactLinks, PendingCalls, useCall, fmtDur, OfficeCallMedia } from '@/components/SalesCall';
 import { AiCallButton, AiCallDetail } from '@/components/AiPortal';
 
 const at11 = (days) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(11, 0, 0, 0); return toLocalInput(d); };
@@ -84,7 +84,7 @@ function Timeline({ lead, activity, names, me }) {
   };
   return (
     <div className="card">
-      <h2>History</h2>
+      <div className="card-head"><h2>History</h2><span className="count-pill">{activity.length}</span></div>
       {!activity.length && <p className="muted">Nothing yet.</p>}
       <ol className="timeline">
         {activity.map((a) => (
@@ -92,7 +92,8 @@ function Timeline({ lead, activity, names, me }) {
             <div className="tl-head"><span>{line(a)}</span><span className="muted small nowrap">{when(a.createdAt)}</span></div>
             {(a.type === 'CALL' || a.type === 'AI_CALL') && (a.to || a.followUpAt) && (
               <div className="muted small">{a.to && <>Status → {STATUS[a.to]?.[0]}</>}{a.to && a.followUpAt && ' · '}{a.followUpAt && <>Next follow-up {when(a.followUpAt)}</>}</div>)}
-            {a.note && a.type !== 'EDIT' && <div className="tl-note">{a.note}</div>}
+            {a.note && a.type !== 'EDIT' && !/^Feedback:\s*$/.test(a.note.trim()) && <Clamp text={a.note} lines={3} className="tl-note" />}
+            {a.type === 'CALL' && <OfficeCallMedia a={a} />}
             {a.type === 'EDIT' && <div className="muted small">{a.note}</div>}
             {a.outcome === 'PENDING' && String(a.by?._id) === String(me._id) && (
               <button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => start(lead, a)}>Fill in what happened</button>)}
@@ -124,28 +125,32 @@ export default function LeadPage() {
   };
 
   return (
-    <>
-      <Link href="/sales?tab=leads" className="small">← Leads</Link>
-      <div className="lead-top">
-        <div style={{ minWidth: 0 }}>
-          <h1>{l.name}</h1>
-          <div className="lead-tags"><GradeBadge g={l.grade} score={l.score} /><StatusBadge s={l.status} /><RepeatBadge n={l.timesFound} />
-            <span className="muted small">{[l.category, l.area, l.city].filter(Boolean).join(' · ')}</span></div>
+    <div className="sales">
+      <Link href="/sales?tab=leads" className="back-link">← All leads</Link>
+      <section className="card lead-hero">
+        <div className="lh-main">
+          <Initials name={l.name} size={56} />
+          <div className="lh-title">
+            <h1>{l.name}</h1>
+            <div className="lh-meta">{[l.category, l.area, l.city].filter(Boolean).join(' · ') || 'No category'}</div>
+            <div className="lead-tags"><GradeBadge g={l.grade} score={l.score} /><StatusBadge s={l.status} /><RepeatBadge n={l.timesFound} /></div>
+          </div>
+          <button className="btn lh-edit" onClick={() => setEditing(true)}>Edit</button>
         </div>
-        <button className="btn" onClick={() => setEditing(true)}>Edit</button>
-      </div>
+        <div className="lh-actions">
+          <CallButton lead={l} big />
+          <AiCallButton lead={l} onStarted={() => { setMsg('The AI agent is calling now. The result shows up here when the call ends.'); load(); }} />
+          <ContactLinks lead={l} labels />
+        </div>
+        <dl className="lh-stats">
+          <div><dt>Calls</dt><dd>{l.callCount || 0}<span className="muted small"> · {l.connectedCount || 0} talked</span></dd></div>
+          <div><dt>Last call</dt><dd>{l.callCount ? <><b>{l.lastCallBy?.name || 'AI agent'}</b> <OutcomeBadge o={l.lastOutcome} /><span className="muted small">{when(l.lastCallAt)}</span></> : <span className="muted">Not called yet</span>}</dd></div>
+          <div><dt>Next follow-up</dt><dd className={l.nextFollowUpAt && new Date(l.nextFollowUpAt) < new Date() ? 'overdue' : ''}>{l.nextFollowUpAt ? when(l.nextFollowUpAt) : <span className="muted">None planned</span>}</dd></div>
+          <div><dt>Handled by</dt><dd>{l.assignedTo?.name || <span className="muted">Nobody</span>}</dd></div>
+        </dl>
+      </section>
       <PendingCalls pending={pending} />
       {msg && <div className="alert ok">{msg}</div>}
-
-      <div className="card call-card">
-        <CallButton lead={l} big />
-        <AiCallButton lead={l} onStarted={() => { setMsg('The AI agent is calling now. The result shows up here when the call ends.'); load(); }} />
-        <ContactLinks lead={l} labels />
-        <div className="call-card-info">
-          {l.callCount ? <>Last call: <b>{l.lastCallBy?.name}</b> · <OutcomeBadge o={l.lastOutcome} /> · {when(l.lastCallAt)} · {l.callCount} call{l.callCount > 1 ? 's' : ''} ({l.connectedCount || 0} talked)</> : 'Not called yet'}
-          {l.nextFollowUpAt && <> · Next follow-up <b className={new Date(l.nextFollowUpAt) < new Date() ? 'overdue' : ''}>{when(l.nextFollowUpAt)}</b></>}
-        </div>
-      </div>
 
       <div className="lead-grid">
         <div>
@@ -196,6 +201,6 @@ export default function LeadPage() {
       </div>
 
       {editing && <LeadForm lead={l} team={overview.team} manager={manager} onClose={() => setEditing(false)} onDone={() => { setEditing(false); setMsg('Details saved.'); load(); }} />}
-    </>
+    </div>
   );
 }

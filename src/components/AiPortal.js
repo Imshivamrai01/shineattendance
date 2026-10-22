@@ -24,6 +24,11 @@ const todayIst = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0,
 const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
 const who = (c) => c.callerName || c.contactName || c.company || c.lead?.name || c.phone || 'Unknown caller';
 
+// Sarvam Bulbul v4-flash voices (female first). "enhi" voices are made for English-Hindi mix.
+const SARVAM_VOICES = [['simran_enhi_customer', 'Simran: Hinglish, friendly'], ['ishita_enhi_customer', 'Ishita: Hinglish, friendly'],
+  ['ritu_hi_customer', 'Ritu: Hindi'], ['simran_hi_assistant', 'Simran: Hindi, assistant'], ['neha_en_customer', 'Neha: Indian English'],
+  ['simran_en_customer', 'Simran: Indian English'], ['shubh_enhi_ads', 'Shubh (male): Hinglish']];
+
 const KINDS = [['SALES', 'Sales (creates / updates sales leads)'], ['INTERVIEW', 'Interview invite'], ['FEEDBACK', 'Feedback'], ['OTHER', 'Other']];
 
 /** Call types (Sales, Interview invite, Feedback...) and company info for the agent. */
@@ -35,11 +40,11 @@ export function useAgentSetup() {
 }
 
 /** Call type dropdown. `kinds` limits the choices (e.g. no Sales on the CRM page). */
-export function ScriptSelect({ scripts, value, onChange, kinds }) {
+export function ScriptSelect({ scripts, value, onChange, kinds, hint = true }) {
   const list = (scripts || []).filter((x) => x.active !== false && (!kinds || kinds.includes(x.kind)));
   useEffect(() => { if (!value && list[0]) onChange(list[0]._id); }, [value, list, onChange]);
   return (
-    <Field label="Call type" hint="What the agent says on this call. Edit it under Agent setup.">
+    <Field label="Call type" hint={hint ? 'What the agent says on this call. Edit it under Agent setup.' : undefined}>
       <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
         {!list.length && <option value="">Loading…</option>}
         {list.map((x) => <option key={x._id} value={x._id}>{x.name}</option>)}
@@ -55,7 +60,7 @@ export function AgentSetup({ canEdit = true, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  const fromSetup = (x) => ({ companyInfo: x.companyInfo, scripts: x.scripts.map((y) => ({ ...y })), transfer: { ...x.transfer },
+  const fromSetup = (x) => ({ companyInfo: x.companyInfo, scripts: x.scripts.map((y) => ({ ...y })), transfer: { ...x.transfer }, voice: { ...x.voice }, officeLine: x.officeLine,
     people: Object.fromEntries((x.people || []).map((u) => [u._id, u.aiTransfer])) });
   useEffect(() => { if (setup && !f) setF(fromSetup(setup)); }, [setup, f]);
   if (!f) return <Skeleton title={false} rows={4} />;
@@ -95,8 +100,29 @@ export function AgentSetup({ canEdit = true, onSaved }) {
           <label className="check"><input type="checkbox" disabled={!canEdit} checked={x.active !== false} onChange={(e) => setScript(i, 'active', e.target.checked)} /> Available to choose</label>
         </details>
       ))}
+      <h3 style={{ margin: '18px 0 8px' }}>Voice</h3>
+      <p className="muted small" style={{ marginTop: 0 }}>Which service speaks for the agent. With Auto it uses Rumik, and if Rumik stops working during a call (no balance, bad key) it switches to Sarvam for the rest of that call, and Admins get a notification. A chosen service also falls back to the other one instead of going silent.</p>
+      {f.voice && (
+        <div className="form two">
+          <Field label="Voice service">
+            <select disabled={!canEdit} value={f.voice.provider} onChange={(e) => setF({ ...f, voice: { ...f.voice, provider: e.target.value } })}>
+              <option value="auto">Auto: Rumik, Sarvam as backup</option>
+              <option value="rumik">Rumik (₹0.50 per 1,000 characters)</option>
+              <option value="sarvam">Sarvam Bulbul (₹2 per 1,000 characters)</option>
+            </select>
+          </Field>
+          <Field label="Sarvam voice" hint="Used whenever Sarvam speaks">
+            <select disabled={!canEdit} value={f.voice.sarvamSpeaker} onChange={(e) => setF({ ...f, voice: { ...f.voice, sarvamSpeaker: e.target.value } })}>
+              {SARVAM_VOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
+      <h3 style={{ margin: '18px 0 8px' }}>Office line for sales calls</h3>
+      <label className="check"><input type="checkbox" disabled={!canEdit} checked={f.officeLine !== false} onChange={(e) => setF({ ...f, officeLine: e.target.checked })} /> When someone presses Call on a lead, ring their own phone first and then the lead, from the company number. The call is recorded, transcribed and summarised on the lead.</label>
+      <p className="muted small">The first time someone calls, they are asked which mobile to ring (once). Off: the Call button opens the phone&apos;s dialer as before.</p>
       <h3 style={{ margin: '18px 0 8px' }}>Live transfer to a person</h3>
-      <p className="muted small" style={{ marginTop: 0 }}>When a caller asks to talk to someone, the agent rings a person below. They first hear a one-line summary, then talk to the caller. That conversation is recorded, transcribed and summarised on the call. If nobody picks up, the caller hears that the team will call back, and it becomes a callback.</p>
+      <p className="muted small" style={{ marginTop: 0 }}>When a caller asks to talk to someone, the agent rings a person below. They get a notification with a one-line summary, then talk to the caller. That conversation is recorded, transcribed and summarised on the call. If nobody picks up, the caller hears that the team will call back, and it becomes a callback.</p>
       {f.transfer && (
         <div className="form two">
           <label className="check"><input type="checkbox" disabled={!canEdit} checked={f.transfer.enabled} onChange={(e) => setF({ ...f, transfer: { ...f.transfer, enabled: e.target.checked } })} /> Allow live transfer</label>
@@ -115,7 +141,7 @@ export function AgentSetup({ canEdit = true, onSaved }) {
           <thead><tr><th>Receives transfers</th><th>Person</th><th>Mobile</th></tr></thead>
           <tbody>{setup.people.map((u) => (
             <tr key={u._id} className={u.hasMobile ? '' : 'muted'}>
-              <td><input type="checkbox" aria-label={`${u.name} receives AI transfers`} disabled={!canEdit || !u.hasMobile} checked={!!f.people?.[u._id]}
+              <td className="sel"><input type="checkbox" aria-label={`${u.name} receives AI transfers`} disabled={!canEdit || !u.hasMobile} checked={!!f.people?.[u._id]}
                 onChange={(e) => setF({ ...f, people: { ...f.people, [u._id]: e.target.checked } })} /></td>
               <td>{u.name} <span className="muted small">{u.role}</span></td>
               <td className="small">{u.hasMobile ? u.mobile : 'No mobile number in profile'}</td>
@@ -314,17 +340,25 @@ function CallLeads({ d, onQueued }) {
         </div>
       )}
       {err && <div className="alert">{err}</div>}
+      {rows.length > 0 && (
+        <div className="row between" style={{ marginBottom: 8 }}>
+          <button type="button" className="btn sm" disabled={!pageCallable.length} onClick={() => setSel({ ...sel, ...Object.fromEntries(pageCallable.map((l) => [l._id, !allOn])) })}>
+            {allOn ? 'Clear selection' : `Select all ${pageCallable.length}`}
+          </button>
+          <span className="muted small">{ids.length} selected</span>
+        </div>
+      )}
       {!res ? <Skeleton title={false} /> : !rows.length ? <Empty message="No leads match these filters." /> : (
         <div className="table-wrap"><table className="leads">
           <thead><tr>
-            <th><input type="checkbox" aria-label="Select all callable leads on this page" checked={allOn} onChange={() => setSel({ ...sel, ...Object.fromEntries(pageCallable.map((l) => [l._id, !allOn])) })} /></th>
+            <th className="sel"><input type="checkbox" aria-label="Select all callable leads on this page" checked={allOn} onChange={() => setSel({ ...sel, ...Object.fromEntries(pageCallable.map((l) => [l._id, !allOn])) })} /></th>
             <th>Lead</th><th>Phone</th><th>Status</th><th>Last call</th>
           </tr></thead>
           <tbody>{rows.map((l) => {
             const ok = callable(l);
             return (
               <tr key={l._id} className={ok ? '' : 'muted'}>
-                <td><input type="checkbox" aria-label={`Select ${l.name}`} disabled={!ok} checked={!!sel[l._id]} onChange={(e) => setSel({ ...sel, [l._id]: e.target.checked })} /></td>
+                <td className="sel"><input type="checkbox" aria-label={`Select ${l.name}`} disabled={!ok} checked={!!sel[l._id]} onChange={(e) => setSel({ ...sel, [l._id]: e.target.checked })} /></td>
                 <td className="c-lead"><Link href={`/sales/leads/${l._id}`} className="lead-name">{l.name}</Link><div className="muted small">{[l.category, l.area || l.city].filter(Boolean).join(' · ')}</div></td>
                 <td className="nowrap">{l.phone || '—'}{!ok && <div className="small">Not a mobile number</div>}</td>
                 <td><StatusBadge s={l.status} /></td>
@@ -334,10 +368,12 @@ function CallLeads({ d, onQueued }) {
         </table></div>
       )}
       {res && res.total > rows.length && <p className="muted small">Showing the top {rows.length} of {res.total} by lead quality. Narrow the filters to see others.</p>}
-      <div className="row" style={{ marginTop: 12, position: 'sticky', bottom: 8, alignItems: 'flex-end' }}>
-        <div style={{ minWidth: 200 }}><ScriptSelect scripts={setup?.scripts} value={scriptId} onChange={setScriptId} /></div>
-        <input aria-label="Reason for the call" placeholder="Reason for the call (optional, the agent uses it)" value={purpose} maxLength={300} onChange={(e) => setPurpose(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
-        <button className="btn primary" disabled={!ids.length} onClick={() => setAsking(true)}>Call {ids.length || ''} with AI</button>
+      <div className="ai-callbar">
+        <div className="ai-callbar-type"><ScriptSelect scripts={setup?.scripts} value={scriptId} onChange={setScriptId} hint={false} /></div>
+        <div className="ai-callbar-reason"><Field label="Reason for the call (optional)">
+          <input aria-label="Reason for the call" placeholder="Reason for the call (optional), e.g. follow up on the website enquiry" value={purpose} maxLength={300} onChange={(e) => setPurpose(e.target.value)} />
+        </Field></div>
+        <button className="btn primary" disabled={!ids.length} onClick={() => setAsking(true)}>{ids.length ? `Call ${ids.length} with AI` : 'Choose leads to call'}</button>
       </div>
       {asking && (
         <Modal title={`Let the AI agent call ${ids.length} lead${ids.length === 1 ? '' : 's'}?`} onClose={() => !busy && setAsking(false)}>

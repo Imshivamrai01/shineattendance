@@ -12,7 +12,10 @@
   "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "shine-call-recordings" }],
   "workers_dev": true,
   "vars": {
-    "GROQ_MODEL": "openai/gpt-oss-120b",
+    // Conversation model: the fastest that follows the rules (qwen first word ~0.2 s vs ~0.55 s for gpt-oss-120b).
+    "GROQ_MODEL": "qwen/qwen3.8-27b",
+    "EXTRACT_MODEL": "openai/gpt-oss-120b",
+    "TTS_PROVIDER": "auto",
     "RUMIK_GATEWAY_URL": "https://silk-api.rumik.ai",
     "RUMIK_MODEL": "mulberry",
     "RUMIK_DESCRIPTION": "a warm, friendly Indian female receptionist voice, clear Hinglish",
@@ -25,7 +28,7 @@
     "RECORDINGS_PREFIX": "staging"
   },
   // Secrets (wrangler secret put): DEEPGRAM_API_KEY, GROQ_API_KEY, RUMIK_API_KEY, STAGING_TOKEN,
-  // VOBIZ_AUTH_ID, VOBIZ_AUTH_TOKEN, CRM_WEBHOOK_SECRET (same value as AI_WEBHOOK_SECRET in the CRM)
+  // VOBIZ_AUTH_ID, VOBIZ_AUTH_TOKEN, CRM_WEBHOOK_SECRET (same value as AI_WEBHOOK_SECRET in the CRM), SARVAM_API_KEY
   "observability": { "enabled": true },
   "env": {
     // Live voice engine for attendance.shineinfosolutions.in: wrangler deploy --env production (own secrets, own sessions).
@@ -34,7 +37,9 @@
       "durable_objects": { "bindings": [{ "name": "SESSION", "class_name": "VoiceSession" }] },
       "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "shine-call-recordings" }],
       "vars": {
-        "GROQ_MODEL": "openai/gpt-oss-120b",
+        "GROQ_MODEL": "qwen/qwen3.8-27b",
+        "EXTRACT_MODEL": "openai/gpt-oss-120b",
+        "TTS_PROVIDER": "auto",
         "RUMIK_GATEWAY_URL": "https://silk-api.rumik.ai",
         "RUMIK_MODEL": "mulberry",
         "RUMIK_DESCRIPTION": "a warm, friendly Indian female receptionist voice, clear Hinglish",
