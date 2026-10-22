@@ -22,7 +22,7 @@ export function startWaMock(port) {
       if (req.method === 'GET' && path === '/debug_token') {
         return send(200, { data: full
           ? { scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'], granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['999999999', '222222222'] }, { scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] }
-          : { scopes: ['whatsapp_business_messaging'], granular_scopes: [{ scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] } });
+          : { user_id: '61500000000001', app_id: '3263884590488956', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_messaging'], granular_scopes: [{ scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] } });
       }
       if (limited && path !== '/111111111') return send(400, { error: { code: 100, error_subcode: 33, message: 'Unsupported get request' } });
       if (req.method === 'GET' && path === '/111111111') return send(200, { display_phone_number: '+91 90000 11111', verified_name: 'Shine Infosolutions', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_250' });

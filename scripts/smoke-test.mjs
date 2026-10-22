@@ -395,7 +395,7 @@ try {
   assert.equal((await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: 'w'.repeat(60) })).status, 400);
   // The account ID is found from the token when it is left empty or is wrong; a token without the management permission is named
   const noPerm = await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '', token: 'n'.repeat(60) });
-  assert.equal(noPerm.status, 400); assert.match(noPerm.data.error, /missing the whatsapp_business_management permission/);
+  assert.equal(noPerm.status, 400); assert.match(noPerm.data.error, /missing the whatsapp_business_management permission/); assert.match(noPerm.data.error, /system user ID 61500000000001, app ID 3263884590488956/); assert.equal(noPerm.data.error.includes('n'.repeat(60)), false, 'token never in the error');
   const wrongWaba = ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '3263884590488956', token: wa.token }));
   assert.equal(wrongWaba.businessId, wa.businessId); assert.equal(wrongWaba.corrected, true);
   const emptyWaba = ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '', token: wa.token }));

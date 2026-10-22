@@ -70,9 +70,15 @@ async function tokenGrants(settings) {
     const d = (await graph(settings, `debug_token?input_token=${encodeURIComponent(settings.waToken)}`)).data || {};
     const ids = new Set();
     for (const g of d.granular_scopes || []) if (/^whatsapp_business_/.test(g.scope)) (g.target_ids || []).forEach((x) => ids.add(String(x)));
-    return { scopes: d.scopes || [], wabas: [...ids] };
+    return { scopes: d.scopes || [], wabas: [...ids], userId: d.user_id, appId: d.app_id, valid: d.is_valid,
+      expires: d.expires_at ? new Date(d.expires_at * 1000).toISOString().slice(0, 10) : 'never',
+      granular: (d.granular_scopes || []).map((g) => `${g.scope}${g.target_ids?.length ? ` → ${g.target_ids.join(', ')}` : ' → (no ids)'}`) };
   } catch { return null; }
 }
+
+// What Meta says about the token, for the error message (never the token itself).
+const describe = (g) => (g ? ` [Token details from Meta: system user ID ${g.userId || '?'}, app ID ${g.appId || '?'}, valid: ${g.valid}, expires: ${g.expires}; `
+  + `permissions: ${g.granular.length ? g.granular.join('; ') : g.scopes.join(', ') || 'none'}]` : ' [Meta did not return the token details]');
 
 const numbersOf = async (settings, waba) => (await graph(settings, `${waba}/phone_numbers?fields=id,display_phone_number&limit=100`)).data || [];
 
@@ -88,9 +94,9 @@ export async function checkAccount(settings) {
     throw e;
   }
   const has = (list) => list.some((n) => String(n.id) === String(settings.waPhoneId));
-  let given = null;
+  let given = null, givenErr = '';
   if (settings.waBusinessId) {
-    try { given = await numbersOf(settings, settings.waBusinessId); } catch (e) { if (e.wa?.code !== 100) throw e; }
+    try { given = await numbersOf(settings, settings.waBusinessId); } catch (e) { if (e.wa?.code !== 100) throw e; givenErr = ` Meta said about account ${settings.waBusinessId}: "${e.wa?.message || e.message}".`; }
     if (given && has(given)) return { account, businessId: settings.waBusinessId };
   }
   const grants = await tokenGrants(settings);
@@ -99,16 +105,17 @@ export async function checkAccount(settings) {
     try { if (has(await numbersOf(settings, id))) return { account, businessId: id }; } catch { /* not this one */ }
   }
   // Nothing fits: say why, as precisely as possible.
+  const info = givenErr + describe(grants);
   if (grants && !grants.scopes.includes('whatsapp_business_management')) {
-    throw new Error(`The token is missing the whatsapp_business_management permission (it has: ${grants.scopes.join(', ') || 'none'}). Generate a new token for the system user with both whatsapp_business_messaging and whatsapp_business_management ticked, and paste it here.`);
+    throw new Error(`The token is missing the whatsapp_business_management permission. Generate a new token for the system user with both whatsapp_business_messaging and whatsapp_business_management ticked, and paste it here.${info}`);
   }
   if (grants && !grants.wabas.length) {
-    throw new Error('The token has no WhatsApp account assigned. In Business Settings → Accounts → WhatsApp accounts, open the account with this number → Assign people → give the system user Full control, then generate a new token and paste it here.');
+    throw new Error(`The token has no WhatsApp account in it. The system user that made it needs the WhatsApp account assigned (Business Settings → Accounts → WhatsApp accounts → the account → Assign people → Full control) before the token is generated.${info}`);
   }
   if (given) {
-    throw new Error(`${account.number} is not in WhatsApp Business Account ${settings.waBusinessId}. Numbers in that account: ${given.map((n) => `${n.display_phone_number} (ID ${n.id})`).join(', ') || 'none'}. Leave the account ID empty to find it automatically.`);
+    throw new Error(`${account.number} is not in WhatsApp Business Account ${settings.waBusinessId}. Numbers in that account: ${given.map((n) => `${n.display_phone_number} (ID ${n.id})`).join(', ') || 'none'}. Leave the account ID empty to find it automatically.${info}`);
   }
-  throw new Error(`None of the WhatsApp accounts this token can use${grants ? ` (${grants.wabas.join(', ')})` : ''} holds phone number ID ${settings.waPhoneId}. Check that the system user has the WhatsApp account with ${account.number} assigned, then generate a new token.`);
+  throw new Error(`None of the WhatsApp accounts this token can use holds phone number ID ${settings.waPhoneId}. Check that the system user has the WhatsApp account with ${account.number} assigned, then generate a new token.${info}`);
 }
 
 export async function listTemplates(settings) {
