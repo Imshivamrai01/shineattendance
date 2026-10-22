@@ -15,7 +15,7 @@ export const GET = handler(async (ctx) => {
     if (tpl.status === 'fulfilled') out.templates = tpl.value;
     const bad100 = (r) => r.status === 'rejected' && r.reason?.wa?.code === 100;
     if (bad100(acc)) out.error = `Phone number ID ${s.waPhoneId} is wrong for this token. Open WhatsApp settings and copy the Phone number ID shown under the number in WhatsApp → API Setup.`;
-    else if (bad100(tpl)) out.error = `WhatsApp Business Account ID ${s.waBusinessId} is wrong for this token. Open WhatsApp settings and use the "Messaging Account ID" shown above the number in WhatsApp → Production setup (not the App ID or the Business portfolio ID).`;
+    else if (bad100(tpl)) out.error = `WhatsApp Business Account ID ${s.waBusinessId} does not work with this token. Open WhatsApp settings, clear that field and press Save and check: the right account is found from the token.`;
     else out.error = [acc, tpl].find((r) => r.status === 'rejected')?.reason?.message;
   }
   out.presets = Object.entries(PRESETS).map(([name, p]) => ({ name, label: p.label, purpose: p.purpose, text: p.text, fields: p.fields,

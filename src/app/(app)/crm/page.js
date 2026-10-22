@@ -24,7 +24,10 @@ function Connect({ d, onSaved }) {
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const save = async (e) => {
     e.preventDefault(); setBusy(true); setErr('');
-    try { await api('/crm/config', { method: 'POST', body: f }); onSaved('WhatsApp connected.'); } catch (x) { setErr(x.message); }
+    try {
+      const r = await api('/crm/config', { method: 'POST', body: f });
+      onSaved(`WhatsApp connected: ${r.account.name || ''} ${r.account.number}.${r.corrected ? ` WhatsApp Business Account ID ${r.businessId} was found from the token and saved.` : ''}`);
+    } catch (x) { setErr(x.message); }
     setBusy(false);
   };
   return (
@@ -33,7 +36,7 @@ function Connect({ d, onSaved }) {
       <p className="muted small" style={{ marginTop: 0 }}>From Meta for Developers → your app → WhatsApp → API Setup. Use a permanent (System User) token: the temporary one stops working after 24 hours.</p>
       <div className="form two">
         <Field label="Phone number ID"><input value={f.phoneId} onChange={set('phoneId')} inputMode="numeric" required /></Field>
-        <Field label="WhatsApp Business Account ID"><input value={f.businessId} onChange={set('businessId')} inputMode="numeric" required /></Field>
+        <Field label="WhatsApp Business Account ID (optional)" hint="Leave empty: it is found from the token."><input value={f.businessId} onChange={set('businessId')} inputMode="numeric" placeholder="Found automatically" /></Field>
         <Field label="Access token" span hint={d.hasToken ? 'A token is saved. Leave blank to keep it.' : undefined}>
           <textarea rows={2} value={f.token} onChange={set('token')} placeholder={d.hasToken ? '•••••••• (saved)' : 'Paste the token'} autoComplete="off" spellCheck={false} />
         </Field>

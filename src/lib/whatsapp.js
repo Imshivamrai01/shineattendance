@@ -62,25 +62,53 @@ export async function accountInfo(settings) {
 }
 
 /**
- * Checks the Phone number ID and the WhatsApp Business Account ID separately, so the error says which one is wrong,
- * and that the number really belongs to that account. Returns accountInfo().
+ * What the token itself can reach, from Meta's debug_token: its permissions and, per permission, the ids it was granted
+ * (for whatsapp_business_* these are WhatsApp Business Account ids). Best effort: null if Meta does not answer.
+ */
+async function tokenGrants(settings) {
+  try {
+    const d = (await graph(settings, `debug_token?input_token=${encodeURIComponent(settings.waToken)}`)).data || {};
+    const ids = new Set();
+    for (const g of d.granular_scopes || []) if (/^whatsapp_business_/.test(g.scope)) (g.target_ids || []).forEach((x) => ids.add(String(x)));
+    return { scopes: d.scopes || [], wabas: [...ids] };
+  } catch { return null; }
+}
+
+const numbersOf = async (settings, waba) => (await graph(settings, `${waba}/phone_numbers?fields=id,display_phone_number&limit=100`)).data || [];
+
+/**
+ * Checks the token, the Phone number ID and the WhatsApp Business Account ID. The account id may be left empty or be
+ * wrong (Meta's screens show several similar ids): the accounts this token was granted are then searched for the one
+ * that holds this phone number. Returns { account, businessId } with the id that works.
  */
 export async function checkAccount(settings) {
   let account;
   try { account = await accountInfo(settings); } catch (e) {
-    if (e.wa?.code === 100) throw new Error(`Phone number ID ${settings.waPhoneId} is not a phone number this token can use. Copy the Phone number ID shown under the number in WhatsApp → API Setup.`);
+    if (e.wa?.code === 100) throw new Error(`Phone number ID ${settings.waPhoneId} is not a phone number this token can use. Copy the Phone number ID shown under the number in WhatsApp → API Setup, and check that the token's system user has that WhatsApp account assigned.`);
     throw e;
   }
-  let numbers;
-  try { numbers = (await graph(settings, `${settings.waBusinessId}/phone_numbers?fields=id,display_phone_number&limit=100`)).data || []; } catch (e) {
-    if (e.wa?.code === 100) throw new Error(`WhatsApp Business Account ID ${settings.waBusinessId} is wrong for this token. Use the "Messaging Account ID" shown above the number in WhatsApp → Production setup (not the App ID or the Business portfolio ID), and make sure the token's system user has that WhatsApp account assigned.`);
-    throw e;
+  const has = (list) => list.some((n) => String(n.id) === String(settings.waPhoneId));
+  let given = null;
+  if (settings.waBusinessId) {
+    try { given = await numbersOf(settings, settings.waBusinessId); } catch (e) { if (e.wa?.code !== 100) throw e; }
+    if (given && has(given)) return { account, businessId: settings.waBusinessId };
   }
-  if (!numbers.some((n) => String(n.id) === String(settings.waPhoneId))) {
-    const list = numbers.map((n) => `${n.display_phone_number} (ID ${n.id})`).join(', ') || 'none';
-    throw new Error(`${account.number} is not in WhatsApp Business Account ${settings.waBusinessId}. Numbers in that account: ${list}.`);
+  const grants = await tokenGrants(settings);
+  for (const id of grants?.wabas || []) {
+    if (id === settings.waBusinessId) continue;
+    try { if (has(await numbersOf(settings, id))) return { account, businessId: id }; } catch { /* not this one */ }
   }
-  return account;
+  // Nothing fits: say why, as precisely as possible.
+  if (grants && !grants.scopes.includes('whatsapp_business_management')) {
+    throw new Error(`The token is missing the whatsapp_business_management permission (it has: ${grants.scopes.join(', ') || 'none'}). Generate a new token for the system user with both whatsapp_business_messaging and whatsapp_business_management ticked, and paste it here.`);
+  }
+  if (grants && !grants.wabas.length) {
+    throw new Error('The token has no WhatsApp account assigned. In Business Settings → Accounts → WhatsApp accounts, open the account with this number → Assign people → give the system user Full control, then generate a new token and paste it here.');
+  }
+  if (given) {
+    throw new Error(`${account.number} is not in WhatsApp Business Account ${settings.waBusinessId}. Numbers in that account: ${given.map((n) => `${n.display_phone_number} (ID ${n.id})`).join(', ') || 'none'}. Leave the account ID empty to find it automatically.`);
+  }
+  throw new Error(`None of the WhatsApp accounts this token can use${grants ? ` (${grants.wabas.join(', ')})` : ''} holds phone number ID ${settings.waPhoneId}. Check that the system user has the WhatsApp account with ${account.number} assigned, then generate a new token.`);
 }
 
 export async function listTemplates(settings) {

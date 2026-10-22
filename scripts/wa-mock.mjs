@@ -15,8 +15,16 @@ export function startWaMock(port) {
     let raw = '';
     req.on('data', (c) => (raw += c)).on('end', () => {
       const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
-      if (req.headers.authorization !== `Bearer ${'t'.repeat(60)}`) return send(401, { error: { code: 190, message: 'Invalid OAuth access token' } });
+      // 't' x60: full token. 'n' x60: a token made without whatsapp_business_management (can see the number, not the account).
+      const full = req.headers.authorization === `Bearer ${'t'.repeat(60)}`, limited = req.headers.authorization === `Bearer ${'n'.repeat(60)}`;
+      if (!full && !limited) return send(401, { error: { code: 190, message: 'Invalid OAuth access token' } });
       const path = req.url.split('?')[0];
+      if (req.method === 'GET' && path === '/debug_token') {
+        return send(200, { data: full
+          ? { scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'], granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['999999999', '222222222'] }, { scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] }
+          : { scopes: ['whatsapp_business_messaging'], granular_scopes: [{ scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] } });
+      }
+      if (limited && path !== '/111111111') return send(400, { error: { code: 100, error_subcode: 33, message: 'Unsupported get request' } });
       if (req.method === 'GET' && path === '/111111111') return send(200, { display_phone_number: '+91 90000 11111', verified_name: 'Shine Infosolutions', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_250' });
       if (req.method === 'GET' && path === '/222222222/message_templates') return send(200, { data: TEMPLATES });
       if (req.method === 'GET' && path === '/222222222/phone_numbers') return send(200, { data: [{ id: '111111111', display_phone_number: '+91 90000 11111' }] });

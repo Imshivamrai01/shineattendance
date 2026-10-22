@@ -393,8 +393,13 @@ try {
   assert.deepEqual(['98765 43210', '09876543210', '+91 98765-43210', '+1 (555) 640-9971', '12345'].map(normalizePhone), ['919876543210', '919876543210', '919876543210', '15556409971', null]); t('CRM: Admin + COO only, needs a WhatsApp connection, phone numbers normalised');
   // Connect (checked against the API), list templates, bulk send with per-person values, failures logged
   assert.equal((await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: 'w'.repeat(60) })).status, 400);
-  const wrongWaba = await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '3263884590488956', token: wa.token });
-  assert.equal(wrongWaba.status, 400); assert.match(wrongWaba.data.error, /Business Account ID 3263884590488956 is wrong/, 'a wrong WABA id is caught when saving, and named');
+  // The account ID is found from the token when it is left empty or is wrong; a token without the management permission is named
+  const noPerm = await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '', token: 'n'.repeat(60) });
+  assert.equal(noPerm.status, 400); assert.match(noPerm.data.error, /missing the whatsapp_business_management permission/);
+  const wrongWaba = ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '3263884590488956', token: wa.token }));
+  assert.equal(wrongWaba.businessId, wa.businessId); assert.equal(wrongWaba.corrected, true);
+  const emptyWaba = ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: '', token: wa.token }));
+  assert.equal(emptyWaba.businessId, wa.businessId); assert.equal(ok(await cooC.call('GET', '/api/crm')).businessId, wa.businessId);
   assert.equal(ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: wa.token })).account.number, '+91 90000 11111');
   const crm2 = ok(await cooC.call('GET', '/api/crm'));
   assert.equal(crm2.configured, true); assert.equal(crm2.account.test, false); assert.equal(JSON.stringify(crm2).includes(wa.token), false, 'token never sent to the browser');
