@@ -1,7 +1,7 @@
 import { M, getSettings } from '@/lib/db';
 import { handler, readJson, bad } from '@/lib/http';
 import { audit } from '@/lib/audit';
-import { checkAccount } from '@/lib/whatsapp';
+import { appIdFor, checkAccount } from '@/lib/whatsapp';
 
 // Save the WhatsApp Cloud API details. They are checked against Meta first; the token is stored server-side only.
 export const POST = handler(async (ctx) => {
@@ -20,6 +20,7 @@ export const POST = handler(async (ctx) => {
   try { ({ account, businessId: found } = await checkAccount(next)); } catch (e) { throw bad(e.message); }
   const corrected = found !== next.waBusinessId;
   next.waBusinessId = found; // the account that really holds this number (found from the token when empty or wrong)
+  next.waAppId = await appIdFor({ ...next, waAppId: '' }).catch(() => cur.waAppId || ''); // needed to upload template samples
   await M.Setting.updateOne({ key: 'system' }, { $set: next });
   await audit(ctx, { action: 'CHANGED_WHATSAPP_SETTINGS', entityType: 'Setting', entityId: 'whatsapp',
     oldData: { phoneId: cur.waPhoneId, businessId: cur.waBusinessId }, newData: { phoneId: next.waPhoneId, businessId: next.waBusinessId, tokenChanged: next.waToken !== cur.waToken, appSecretChanged: next.waAppSecret !== (cur.waAppSecret || ''), number: account.number } });

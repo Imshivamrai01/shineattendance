@@ -49,12 +49,6 @@ export function normalizePhone(raw) {
   return d.length >= 11 && d.length <= 15 ? d : null;
 }
 
-const bodyOf = (t) => t.components?.find((c) => c.type === 'BODY')?.text || '';
-const varCount = (text) => new Set(text.match(/\{\{\d+\}\}/g) || []).size;
-// Templates with a media / variable header or URL-variable buttons need extra inputs this page doesn't collect.
-const simple = (t) => !(t.components || []).some((c) => (c.type === 'HEADER' && (c.format !== 'TEXT' || /\{\{/.test(c.text || '')))
-  || (c.type === 'BUTTONS' && (c.buttons || []).some((b) => /\{\{/.test(b.url || ''))) || c.type === 'CAROUSEL');
-
 export async function accountInfo(settings) {
   const p = await graph(settings, `${settings.waPhoneId}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier`);
   return { number: p.display_phone_number, name: p.verified_name, quality: p.quality_rating, tier: p.messaging_limit_tier,
@@ -118,52 +112,212 @@ export async function checkAccount(settings) {
   throw new Error(`None of the WhatsApp accounts this token can use holds phone number ID ${settings.waPhoneId}. Check that the system user has the WhatsApp account with ${account.number} assigned, then generate a new token.${info}`);
 }
 
-export async function listTemplates(settings) {
-  const out = await graph(settings, `${settings.waBusinessId}/message_templates?fields=name,status,language,category,components&limit=100`);
-  return (out.data || []).map((t) => ({ name: t.name, language: t.language, status: t.status, category: t.category, body: bodyOf(t), vars: varCount(bodyOf(t)), usable: t.status === 'APPROVED' && simple(t) }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+/* ---------- Templates: list, create (with media headers and buttons), send ---------- */
+
+const varCount = (text) => new Set(String(text || '').match(/\{\{\d+\}\}/g) || []).size;
+const MEDIA = ['IMAGE', 'VIDEO', 'DOCUMENT'];
+// Media WhatsApp accepts in a template header (and the most this app sends; Meta's own limits are 5 / 16 / 100 MB).
+export const MEDIA_RULES = {
+  IMAGE: { types: ['image/jpeg', 'image/png'], max: 5 * 1024 * 1024, label: 'Image (JPG / PNG, up to 5 MB)' },
+  VIDEO: { types: ['video/mp4', 'video/3gpp'], max: 16 * 1024 * 1024, label: 'Video (MP4, up to 16 MB)' },
+  DOCUMENT: { types: ['application/pdf'], max: 30 * 1024 * 1024, label: 'PDF document (up to 30 MB)' },
+};
+export const mediaKind = (mime) => Object.keys(MEDIA_RULES).find((k) => MEDIA_RULES[k].types.includes(mime)) || null;
+
+/** One template as the CRM page uses it: header / body / footer / buttons, how many values each needs, and whether it can be sent here. */
+function shapeTemplate(t) {
+  const c = (type) => (t.components || []).find((x) => x.type === type);
+  const h = c('HEADER'), b = c('BODY'), f = c('FOOTER'), btns = c('BUTTONS')?.buttons || [];
+  const header = h ? { format: h.format, text: h.text || '', vars: h.format === 'TEXT' ? varCount(h.text) : 0 } : null;
+  const buttons = btns.map((x) => ({ type: x.type, text: x.text, url: x.url, phone: x.phone_number, vars: x.type === 'URL' ? varCount(x.url) : 0 }));
+  const supported = (!header || header.format === 'TEXT' || MEDIA.includes(header.format))
+    && buttons.every((x) => ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].includes(x.type))
+    && !(t.components || []).some((x) => x.type === 'CAROUSEL');
+  return {
+    id: t.id, name: t.name, language: t.language, status: t.status, category: t.category, reason: t.rejected_reason && t.rejected_reason !== 'NONE' ? t.rejected_reason : '',
+    header, body: b?.text || '', vars: varCount(b?.text), footer: f?.text || '', buttons,
+    media: header && MEDIA.includes(header.format) ? header.format : null,
+    usable: t.status === 'APPROVED' && supported, supported,
+  };
 }
 
-/** Send one template message. `params` fill {{1}}, {{2}}… in the body. Returns the WhatsApp message id. */
-export async function sendTemplate(settings, { to, template, language, params = [] }) {
+export async function listTemplates(settings) {
+  const out = await graph(settings, `${settings.waBusinessId}/message_templates?fields=id,name,status,language,category,components,rejected_reason&limit=200`);
+  return (out.data || []).map(shapeTemplate).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The Meta app id (needed for uploading a template's sample media), from the token when not saved yet. */
+export async function appIdFor(settings) {
+  if (settings.waAppId) return settings.waAppId;
+  const g = await tokenGrants(settings);
+  if (!g?.appId) throw new Error('Could not find the Meta app for this token. Save WhatsApp settings again with the token.');
+  return String(g.appId);
+}
+
+async function rawPost(url, headers, body) {
+  let res, out;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(60000) });
+    out = await res.json();
+  } catch (e) { throw new HttpError(502, `Could not reach WhatsApp: ${e.message}`); }
+  if (!res.ok || out.error) { const e = new Error(friendly(out.error)); e.wa = out.error; throw e; }
+  return out;
+}
+
+/**
+ * Uploads a sample file for a template's media header (Meta's resumable upload) and returns the handle
+ * that goes into the template's example. Meta reviews the template with this sample.
+ */
+export async function uploadSample(settings, { appId, bytes, mime, name }) {
+  const q = new URLSearchParams({ file_name: name || 'sample', file_length: String(bytes.byteLength), file_type: mime });
+  const session = await rawPost(`${GRAPH}/${appId}/uploads?${q}`, { authorization: `Bearer ${settings.waToken}` });
+  const done = await rawPost(`${GRAPH}/${session.id}`, { authorization: `OAuth ${settings.waToken}`, file_offset: '0', 'content-type': mime }, bytes);
+  if (!done.h) throw new Error('WhatsApp did not accept the sample file');
+  return done.h;
+}
+
+/** Uploads a file for sending (WhatsApp keeps it for 30 days). Returns the WhatsApp media id. */
+export async function uploadMedia(settings, { bytes, mime, name }) {
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mime);
+  form.append('file', new Blob([bytes], { type: mime }), name || 'file');
+  const out = await rawPost(`${GRAPH}/${settings.waPhoneId}/media`, { authorization: `Bearer ${settings.waToken}` }, form);
+  return out.id;
+}
+
+const clip = (v, n) => String(v ?? '').trim().slice(0, n);
+const LANGS = ['en', 'en_US', 'en_GB', 'hi'];
+
+/**
+ * Checks a template the CRM page built and turns it into Meta's format. `def`:
+ * { name, category: MARKETING | UTILITY, language, header: { format: NONE | TEXT | IMAGE | VIDEO | DOCUMENT, text, example },
+ *   body, examples: [...], footer, buttons: [{ type: QUICK_REPLY | URL | PHONE_NUMBER, text, url, example, phone }] }
+ * `handle` is the uploaded sample for a media header.
+ */
+export function buildTemplate(def, handle) {
+  const name = clip(def.name, 512).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  if (!/^[a-z0-9_]+$/.test(name)) throw bad('Template name: lowercase letters, numbers and _ only (for example summer_offer)');
+  const category = ['MARKETING', 'UTILITY'].includes(def.category) ? def.category : null;
+  if (!category) throw bad('Choose a category: Marketing or Utility');
+  const language = LANGS.includes(def.language) ? def.language : 'en';
+  const body = String(def.body || '').trim();
+  if (!body) throw bad('Write the message text');
+  if (body.length > 1024) throw bad('The message text can be at most 1024 characters');
+  const nums = [...new Set((body.match(/\{\{(\d+)\}\}/g) || []).map((m) => Number(m.slice(2, -2))))].sort((a, b) => a - b);
+  if (nums.some((n, i) => n !== i + 1)) throw bad('Number the values in order: {{1}}, {{2}}, {{3}}…');
+  if (/^\s*\{\{\d+\}\}/.test(body) || /\{\{\d+\}\}[\s.!?]*$/.test(body)) throw bad('WhatsApp does not allow a value {{n}} at the very start or end of the message. Add some words before / after it.');
+  const examples = nums.map((n) => clip(def.examples?.[n - 1], 200));
+  if (examples.some((x) => !x)) throw bad('Give an example for every value ({{1}}, {{2}}…): Meta checks the template with them');
+  const components = [];
+
+  const h = def.header || {};
+  const format = String(h.format || 'NONE').toUpperCase();
+  if (format === 'TEXT') {
+    const text = clip(h.text, 60);
+    if (!text) throw bad('Write the header text (up to 60 characters)');
+    const hv = varCount(text);
+    if (hv > 1 || (hv === 1 && !/\{\{1\}\}/.test(text))) throw bad('The header can have only one value, {{1}}');
+    components.push({ type: 'HEADER', format: 'TEXT', text, ...(hv ? { example: { header_text: [clip(h.example, 60) || 'Example'] } } : {}) });
+  } else if (MEDIA.includes(format)) {
+    if (!handle) throw bad('Attach a sample file for the header: Meta reviews the template with it');
+    components.push({ type: 'HEADER', format, example: { header_handle: [handle] } });
+  } else if (format !== 'NONE') throw bad('Unknown header type');
+
+  components.push({ type: 'BODY', text: body, ...(nums.length ? { example: { body_text: [examples] } } : {}) });
+  const footer = clip(def.footer, 60);
+  if (footer) components.push({ type: 'FOOTER', text: footer });
+
+  const btns = (Array.isArray(def.buttons) ? def.buttons : []).filter((x) => clip(x?.text, 25)).slice(0, 10);
+  if (btns.length) {
+    const out = btns.map((x) => {
+      const text = clip(x.text, 25);
+      if (x.type === 'QUICK_REPLY') return { type: 'QUICK_REPLY', text };
+      if (x.type === 'PHONE_NUMBER') {
+        const phone = String(x.phone || '').replace(/[^\d+]/g, '');
+        if (!/^\+\d{8,15}$/.test(phone)) throw bad(`Button "${text}": phone number with country code, like +919876543210`);
+        return { type: 'PHONE_NUMBER', text, phone_number: phone };
+      }
+      if (x.type === 'URL') {
+        const url = clip(x.url, 2000);
+        if (!/^https:\/\/[^\s]+$/.test(url)) throw bad(`Button "${text}": link must start with https://`);
+        if (/\{\{\d+\}\}/.test(url) && !/\{\{1\}\}$/.test(url)) throw bad(`Button "${text}": a link value can only be {{1}} at the end`);
+        return { type: 'URL', text, url, ...(/\{\{1\}\}$/.test(url) ? { example: [clip(x.example, 500) || url.replace('{{1}}', 'example')] } : {}) };
+      }
+      throw bad('Unknown button type');
+    });
+    if (out.filter((x) => x.type === 'PHONE_NUMBER').length > 1) throw bad('Only one call button is allowed');
+    if (out.filter((x) => x.type === 'URL').length > 2) throw bad('At most two link buttons are allowed');
+    components.push({ type: 'BUTTONS', buttons: out });
+  }
+  return { name, language, category, components };
+}
+
+export async function createTemplate(settings, tpl) {
+  return graph(settings, `${settings.waBusinessId}/message_templates`, { method: 'POST', body: tpl });
+}
+
+/**
+ * Send one template message. `params` fill {{1}}, {{2}}… in the body; `header` is { type: image | video | document, id, filename }
+ * or { type: text, text }; `buttonParams` fill a {{1}} at the end of link buttons, in button order. Returns the WhatsApp message id.
+ */
+export async function sendTemplate(settings, { to, template, language, params = [], header, buttonParams = [] }) {
   // WhatsApp rejects new lines, tabs and long runs of spaces inside a variable.
-  const clean = params.map((p) => String(p ?? '').replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').trim() || '-');
+  const tidy = (p) => String(p ?? '').replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').trim() || '-';
+  const components = [];
+  if (header?.type === 'text') components.push({ type: 'header', parameters: [{ type: 'text', text: tidy(header.text) }] });
+  else if (header?.id) {
+    const media = { id: header.id, ...(header.type === 'document' && header.filename ? { filename: header.filename } : {}) };
+    components.push({ type: 'header', parameters: [{ type: header.type, [header.type]: media }] });
+  }
+  if (params.length) components.push({ type: 'body', parameters: params.map((text) => ({ type: 'text', text: tidy(text) })) });
+  buttonParams.forEach((b, i) => { if (b != null && b !== '') components.push({ type: 'button', sub_type: 'url', index: String(b.index ?? i), parameters: [{ type: 'text', text: tidy(b.text ?? b) }] }); });
   const out = await graph(settings, `${settings.waPhoneId}/messages`, {
     method: 'POST',
-    body: { messaging_product: 'whatsapp', to, type: 'template',
-      template: { name: template, language: { code: language }, ...(clean.length ? { components: [{ type: 'body', parameters: clean.map((text) => ({ type: 'text', text })) }] } : {}) } },
+    body: { messaging_product: 'whatsapp', to, type: 'template', template: { name: template, language: { code: language }, ...(components.length ? { components } : {}) } },
   });
   return out.messages?.[0]?.id;
 }
 
-// Ready-made templates for this app. They are submitted to Meta for approval from the CRM page.
+// Ready-made templates: starting points for the builder on the CRM page (edit, attach a sample if needed, submit).
 export const PRESETS = {
   interview_invite: {
-    label: 'Interview invite', category: 'UTILITY', purpose: 'INTERVIEW',
+    label: 'Interview invite', category: 'UTILITY', purpose: 'INTERVIEW', header: { format: 'NONE' },
     text: 'Hello {{1}},\n\nThank you for applying at Shine Infosolutions. You are invited for an interview for the {{2}} position.\n\nDate: {{3}}\nTime: {{4}}\nVenue: {{5}}\n\nPlease reply to this message to confirm your availability.',
     example: ['Rahul', 'Sales Executive', '10 October 2026', '11:00 AM', 'Shine Infosolutions Office, Gorakhpur'],
     fields: ['Candidate name', 'Position', 'Date', 'Time', 'Venue'],
+    buttons: [{ type: 'QUICK_REPLY', text: 'I will attend' }, { type: 'QUICK_REPLY', text: 'Need another time' }],
+  },
+  shine_offer: {
+    label: 'Offer (with image)', category: 'MARKETING', purpose: 'OFFER', header: { format: 'IMAGE' },
+    text: 'Hello {{1}},\n\nSpecial offer from Shine Infosolutions: {{2}}\n\nOffer valid till {{3}}. Reply YES and our team will call you with the details.',
+    example: ['Rahul', '20% off on website + social media package', '31 October 2026'],
+    fields: ['Customer name', 'Offer', 'Valid till'], footer: 'Shine Infosolutions',
+    buttons: [{ type: 'QUICK_REPLY', text: 'YES, interested' }, { type: 'QUICK_REPLY', text: 'Not now' }],
+  },
+  shine_sales_brochure: {
+    label: 'Sales brochure (PDF)', category: 'MARKETING', purpose: 'SALES', header: { format: 'DOCUMENT' },
+    text: 'Hello {{1}},\n\nThank you for your interest in Shine Infosolutions. Please find our brochure attached with our {{2}} services and prices.\n\nReply to this message or call us to book a free consultation.',
+    example: ['Rahul', 'website, app and digital marketing'], fields: ['Customer name', 'Services'], footer: 'Shine Infosolutions',
+    buttons: [{ type: 'QUICK_REPLY', text: 'Book a consultation' }, { type: 'URL', text: 'Visit website', url: 'https://shineinfosolutions.in' }],
+  },
+  shine_feedback: {
+    label: 'Feedback request', category: 'MARKETING', purpose: 'FEEDBACK', header: { format: 'NONE' },
+    text: 'Hello {{1}},\n\nThank you for choosing Shine Infosolutions for {{2}}. How was your experience with us?\n\nPlease tap a button below, it takes 2 seconds. Your feedback helps us serve you better.',
+    example: ['Rahul', 'your website project'], fields: ['Customer name', 'Service'], footer: 'Shine Infosolutions',
+    buttons: [{ type: 'QUICK_REPLY', text: 'Excellent' }, { type: 'QUICK_REPLY', text: 'Good' }, { type: 'QUICK_REPLY', text: 'Needs improvement' }],
   },
   employee_welcome: {
-    label: 'Employee welcome', category: 'UTILITY', purpose: 'WELCOME',
+    label: 'Employee welcome', category: 'UTILITY', purpose: 'WELCOME', header: { format: 'NONE' },
     text: 'Welcome to Shine Infosolutions, {{1}}!\n\nWe are glad to have you on the team. Your attendance, daily tasks and profile are in the Shine Attendance app: https://attendance.shineinfosolutions.in\n\nPlease check in from the office every day.',
     example: ['Rahul'], fields: ['Employee name'],
   },
   team_update: {
-    label: 'Team update', category: 'UTILITY', purpose: 'BULK',
+    label: 'Team update', category: 'UTILITY', purpose: 'BULK', header: { format: 'NONE' },
     text: 'Hello {{1}},\n\nAn update from Shine Infosolutions:\n{{2}}\n\nPlease contact HR if you have any questions.',
     example: ['Rahul', 'The office will remain closed on Monday for Diwali.'], fields: ['Name', 'Message'],
   },
 };
-
-export async function createPreset(settings, name) {
-  const p = PRESETS[name];
-  if (!p) throw bad('Unknown template');
-  return graph(settings, `${settings.waBusinessId}/message_templates`, {
-    method: 'POST',
-    body: { name, language: 'en', category: p.category, components: [{ type: 'BODY', text: p.text, example: { body_text: [p.example] } }] },
-  });
-}
 
 /* ---------- Meta webhook (delivery ticks and replies) ---------- */
 

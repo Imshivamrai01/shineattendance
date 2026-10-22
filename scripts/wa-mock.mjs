@@ -5,30 +5,36 @@ const TEMPLATES = [
   { name: 'interview_invite', language: 'en', status: 'APPROVED', category: 'UTILITY', components: [{ type: 'BODY', text: 'Hello {{1}},\n\nYou are invited for an interview for the {{2}} position.\n\nDate: {{3}}\nTime: {{4}}\nVenue: {{5}}' }] },
   { name: 'employee_welcome', language: 'en', status: 'APPROVED', category: 'UTILITY', components: [{ type: 'BODY', text: 'Welcome to Shine Infosolutions, {{1}}!' }] },
   { name: 'team_update', language: 'en', status: 'PENDING', category: 'UTILITY', components: [{ type: 'BODY', text: 'Hello {{1}},\n\n{{2}}' }] },
-  { name: 'promo_image', language: 'en', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Offer!' }] },
+  { name: 'promo_image', language: 'en', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Offer for {{1}} today' }, { type: 'FOOTER', text: 'Shine' }, { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Interested' }, { type: 'URL', text: 'View offer', url: 'https://shine.test/o/{{1}}' }] }] },
+  { name: 'old_carousel', language: 'en', status: 'REJECTED', rejected_reason: 'INVALID_FORMAT', category: 'MARKETING', components: [{ type: 'BODY', text: 'Hi' }, { type: 'CAROUSEL', cards: [] }] },
 ];
 
 /** `sent` collects every message body the app posts. A number ending in 0000 is rejected like an un-allowed test recipient. */
 export function startWaMock(port) {
-  const sent = [];
+  const sent = [], created = [], deleted = [];
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c)).on('end', () => {
       const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
       // 't' x60: full token. 'n' x60: a token made without whatsapp_business_management (can see the number, not the account).
-      const full = req.headers.authorization === `Bearer ${'t'.repeat(60)}`, limited = req.headers.authorization === `Bearer ${'n'.repeat(60)}`;
+      const full = [`Bearer ${'t'.repeat(60)}`, `OAuth ${'t'.repeat(60)}`].includes(req.headers.authorization), limited = req.headers.authorization === `Bearer ${'n'.repeat(60)}`;
       if (!full && !limited) return send(401, { error: { code: 190, message: 'Invalid OAuth access token' } });
       const path = req.url.split('?')[0];
       if (req.method === 'GET' && path === '/debug_token') {
         return send(200, { data: full
-          ? { scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'], granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['999999999', '222222222'] }, { scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] }
+          ? { app_id: '3263884590488956', user_id: '61595484312168', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'], granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['999999999', '222222222'] }, { scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] }
           : { user_id: '61500000000001', app_id: '3263884590488956', is_valid: true, expires_at: 0, scopes: ['whatsapp_business_messaging'], granular_scopes: [{ scope: 'whatsapp_business_messaging', target_ids: ['222222222'] }] } });
       }
       if (limited && path !== '/111111111') return send(400, { error: { code: 100, error_subcode: 33, message: 'Unsupported get request' } });
       if (req.method === 'GET' && path === '/111111111') return send(200, { display_phone_number: '+91 90000 11111', verified_name: 'Shine Infosolutions', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_250' });
       if (req.method === 'GET' && path === '/222222222/message_templates') return send(200, { data: TEMPLATES });
       if (req.method === 'GET' && path === '/222222222/phone_numbers') return send(200, { data: [{ id: '111111111', display_phone_number: '+91 90000 11111' }] });
-      if (req.method === 'POST' && path === '/222222222/message_templates') return send(200, { id: '1', status: 'PENDING', category: 'UTILITY' });
+      if (req.method === 'POST' && path === '/222222222/message_templates') { const t = JSON.parse(raw); created.push(t); return send(200, { id: `tpl-${created.length}`, status: 'PENDING', category: t.category }); }
+      if (req.method === 'DELETE' && path === '/222222222/message_templates') { deleted.push(new URL(req.url, 'http://x').searchParams.get('name')); return send(200, { success: true }); }
+      // Resumable upload (template samples): start a session, then send the bytes
+      if (req.method === 'POST' && path === '/3263884590488956/uploads') return send(200, { id: 'upload:s1' });
+      if (req.method === 'POST' && path === '/upload:s1') return send(raw.length ? 200 : 400, raw.length ? { h: '4::sample-handle' } : { error: { code: 100, message: 'Empty file' } });
+      if (req.method === 'POST' && path === '/111111111/media') return send(200, { id: `media-${raw.length}` });
       if (req.method === 'POST' && path === '/111111111/messages') {
         const body = JSON.parse(raw);
         if (body.to.endsWith('0000')) return send(400, { error: { code: 131030, message: 'Recipient phone number not in allowed list' } });
@@ -38,7 +44,7 @@ export function startWaMock(port) {
       send(400, { error: { code: 100, error_subcode: 33, message: 'Unsupported request' } });
     });
   }).listen(port);
-  return { sent, close: () => server.close(), token: 't'.repeat(60), phoneId: '111111111', businessId: '222222222' };
+  return { sent, created, deleted, close: () => server.close(), token: 't'.repeat(60), phoneId: '111111111', businessId: '222222222' };
 }
 
 // Run directly for local UI work: node scripts/wa-mock.mjs

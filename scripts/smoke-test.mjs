@@ -403,7 +403,7 @@ try {
   assert.equal(ok(await cooC.call('POST', '/api/crm/config', { phoneId: wa.phoneId, businessId: wa.businessId, token: wa.token })).account.number, '+91 90000 11111');
   const crm2 = ok(await cooC.call('GET', '/api/crm'));
   assert.equal(crm2.configured, true); assert.equal(crm2.account.test, false); assert.equal(JSON.stringify(crm2).includes(wa.token), false, 'token never sent to the browser');
-  assert.deepEqual(crm2.templates.filter((x) => x.usable).map((x) => x.name), ['employee_welcome', 'interview_invite']);
+  assert.deepEqual(crm2.templates.filter((x) => x.usable).map((x) => x.name), ['employee_welcome', 'interview_invite', 'promo_image']);
   assert.equal(crm2.templates.find((x) => x.name === 'interview_invite').vars, 5);
   const inv = ok(await cooC.call('POST', '/api/crm/send', { template: 'interview_invite', language: 'en', purpose: 'INTERVIEW', recipients: [
     { name: 'Rahul Kumar', phone: '98765 43210', params: ['Rahul', 'Sales Executive', '10 October', '11:00 AM', 'Office,\nGorakhpur'] },
@@ -413,7 +413,50 @@ try {
   assert.equal(wa.sent.length, 1); assert.equal(wa.sent[0].to, '919876543210'); assert.equal(wa.sent[0].template.name, 'interview_invite');
   assert.deepEqual(wa.sent[0].template.components[0].parameters.map((p) => p.text), ['Rahul', 'Sales Executive', '10 October', '11:00 AM', 'Office, Gorakhpur']);
   assert.equal(ok(await cooC.call('GET', '/api/crm')).history.length, 3);
-  assert.equal(ok(await cooC.call('POST', '/api/crm/templates', { preset: 'team_update' })).status, 'PENDING'); t('CRM: connect, templates, bulk send (sent + failed logged), template submission');
+  t('CRM: connect, templates, bulk send (sent + failed logged)');
+
+  // Template builder: text template with buttons; rules checked before anything goes to Meta
+  const fbDef = { name: 'Shine Feedback', category: 'MARKETING', language: 'en', purpose: 'FEEDBACK', header: { format: 'TEXT', text: 'How did we do?' },
+    body: 'Hello {{1}}, how was {{2}} with us?', examples: ['Rahul', 'your website'], fields: ['Customer', 'Service'], footer: 'Shine',
+    buttons: [{ type: 'QUICK_REPLY', text: 'Excellent' }, { type: 'URL', text: 'Review us', url: 'https://g.page/shine' }, { type: 'PHONE_NUMBER', text: 'Call us', phone: '+919876543210' }] };
+  assert.equal((await cooC.call('POST', '/api/crm/templates', { def: { ...fbDef, body: 'Hello {{1}}' } })).status, 400, 'value at the very end is rejected');
+  assert.equal((await cooC.call('POST', '/api/crm/templates', { def: { ...fbDef, body: 'Hi {{2}} there' } })).status, 400, 'values must start at {{1}}');
+  assert.equal((await cooC.call('POST', '/api/crm/templates', { def: { ...fbDef, examples: ['Rahul'] } })).status, 400, 'every value needs an example');
+  assert.equal(wa.created.length, 0, 'nothing sent to Meta for an invalid template');
+  const fb = ok(await cooC.call('POST', '/api/crm/templates', { def: fbDef }));
+  assert.equal(fb.name, 'shine_feedback'); assert.equal(fb.status, 'PENDING');
+  const fbSent = wa.created[0];
+  assert.deepEqual(fbSent.components.map((c) => c.type), ['HEADER', 'BODY', 'FOOTER', 'BUTTONS']);
+  assert.deepEqual(fbSent.components[1].example.body_text, [['Rahul', 'your website']]);
+  assert.deepEqual(fbSent.components[3].buttons.map((b) => b.type), ['QUICK_REPLY', 'URL', 'PHONE_NUMBER']);
+  // Image header: the sample goes through Meta's resumable upload (handle in the example) and into the media library
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ff3f0300050001a5f645400000000049454e44ae426082', 'hex');
+  const upload = async (path, form) => { const res = await fetch(BASE + path, { method: 'POST', headers: { cookie: cooC.cookie }, body: form }); return { status: res.status, data: await res.json() }; };
+  const mk = (def, file, name, type) => { const fd = new FormData(); fd.append('def', JSON.stringify(def)); if (file) fd.append('sample', new Blob([file], { type }), name); return fd; };
+  const offerDef = { name: 'diwali_offer', category: 'MARKETING', language: 'en', header: { format: 'IMAGE' }, body: 'Hello {{1}}, {{2}} for you this Diwali.', examples: ['Rahul', '20% off'], buttons: [] };
+  assert.equal((await upload('/api/crm/templates', mk(offerDef))).status, 400, 'image header needs a sample');
+  assert.equal((await upload('/api/crm/templates', mk(offerDef, Buffer.from('%PDF-1.4'), 'x.pdf', 'application/pdf'))).status, 400, 'a PDF is not an image');
+  const offer = ok(await upload('/api/crm/templates', mk(offerDef, png, 'offer.png', 'image/png')));
+  assert.equal(offer.status, 'PENDING'); assert.equal(offer.media.kind, 'IMAGE');
+  assert.deepEqual(wa.created[1].components[0], { type: 'HEADER', format: 'IMAGE', example: { header_handle: ['4::sample-handle'] } });
+  // Media library: upload a brochure PDF, then send an approved image template with a header file and a link value
+  const fdPdf = new FormData(); fdPdf.append('file', new Blob([Buffer.from('%PDF-1.4 brochure')], { type: 'application/pdf' }), 'Shine brochure.pdf');
+  const pdf = ok(await upload('/api/crm/media', fdPdf)).item;
+  assert.equal(pdf.kind, 'DOCUMENT');
+  const fdBad = new FormData(); fdBad.append('file', new Blob(['hello'], { type: 'text/plain' }), 'a.txt');
+  assert.equal((await upload('/api/crm/media', fdBad)).status, 400);
+  const crm3 = ok(await cooC.call('GET', '/api/crm'));
+  assert.equal(crm3.media.length, 2); assert.ok(crm3.presets.some((p) => p.name === 'shine_sales_brochure' && p.header.format === 'DOCUMENT'));
+  const promo = crm3.templates.find((x) => x.name === 'promo_image');
+  assert.equal(promo.media, 'IMAGE'); assert.equal(promo.buttons[1].vars, 1); assert.equal(crm3.templates.find((x) => x.name === 'old_carousel').reason, 'INVALID_FORMAT');
+  const n0 = wa.sent.length;
+  ok(await cooC.call('POST', '/api/crm/send', { template: 'promo_image', language: 'en', purpose: 'OFFER', header: { mediaId: offer.media._id }, buttons: [{ index: 1, text: 'diwali' }],
+    recipients: [{ name: 'Rahul', phone: '9876543210', params: ['Rahul'] }] }));
+  const sentPromo = wa.sent[n0].template.components;
+  assert.deepEqual(sentPromo[0], { type: 'header', parameters: [{ type: 'image', image: { id: offer.media.waMediaId } }] });
+  assert.deepEqual(sentPromo.at(-1), { type: 'button', sub_type: 'url', index: '1', parameters: [{ type: 'text', text: 'diwali' }] });
+  ok(await cooC.call('DELETE', `/api/crm/templates?name=shine_feedback`)); assert.deepEqual(wa.deleted, ['shine_feedback']);
+  t('CRM templates: builder with header / footer / buttons, image sample upload, media library, send with header file and link value');
 
   // Scheduled jobs
   assert.equal((await admin.call('GET', '/api/cron/daily-report')).status, 401); t('cron endpoints reject requests without the secret');

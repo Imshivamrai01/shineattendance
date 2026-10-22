@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, fmtDateTime } from '@/lib/client';
 import { Badge, Field, Skeleton } from '@/components/ui';
 import { CrmAiCalls } from '@/components/AiPortal';
+import { TemplatesTab, WaPreview, MediaLibrary, MEDIA_KIND } from '@/components/WaTemplates';
 
 const CHUNK = 20;
 const fill = (text, params) => text.replace(/\{\{(\d+)\}\}/g, (_, n) => params[n - 1] || `{{${n}}}`);
@@ -88,13 +89,16 @@ export default function Crm() {
   const [nameVar, setNameVar] = useState(true);
   const [progress, setProgress] = useState(null);
   const [results, setResults] = useState(null);
+  const [headerMedia, setHeaderMedia] = useState(null); // library file for an image / video / PDF header
+  const [headerText, setHeaderText] = useState(''); // value of {{1}} in a text header
+  const [urlVals, setUrlVals] = useState({}); // button index -> value of {{1}} at the end of a link button
 
   const load = useCallback(() => api('/crm').then(setD).catch((e) => setErr(e.message)), []);
   useEffect(() => { load(); }, [load]);
 
   const usable = useMemo(() => (d?.templates || []).filter((t) => t.usable), [d]);
   const tpl = usable.find((t) => `${t.name}|${t.language}` === tplKey);
-  const preset = d?.presets.find((p) => p.name === tpl?.name);
+  const urlButtons = (tpl?.buttons || []).map((b, i) => ({ ...b, index: i })).filter((b) => b.type === 'URL' && b.vars);
   const recipients = useMemo(() => {
     if (!d) return [];
     if (source === 'employees') return d.employees.filter((e) => picked[e._id]).map((e) => ({ name: e.name, phone: e.mobile || '', userId: e._id }));
@@ -102,22 +106,24 @@ export default function Crm() {
   }, [d, source, picked, pasted]);
   const ready = recipients.filter((r) => r.phone);
   const paramsFor = (r) => Array.from({ length: tpl?.vars || 0 }, (_, i) => (i === 0 && nameVar ? (r.name || 'there').split(/\s+/)[0] : values[i + 1] || ''));
-  const missing = tpl ? Array.from({ length: tpl.vars }, (_, i) => i + 1).filter((n) => !(n === 1 && nameVar) && !(values[n] || '').trim()) : [];
+  const missing = tpl ? [
+    ...Array.from({ length: tpl.vars }, (_, i) => i + 1).filter((n) => !(n === 1 && nameVar) && !(values[n] || '').trim()),
+    ...(tpl.media && !headerMedia ? ['header file'] : []),
+    ...(tpl.header?.vars && !headerText.trim() ? ['header text'] : []),
+    ...urlButtons.filter((b) => !(urlVals[b.index] || '').trim()).map((b) => b.text),
+  ] : [];
+  const pickTemplate = (key) => { setTplKey(key); setValues({}); setResults(null); setHeaderMedia(null); setHeaderText(''); setUrlVals({}); };
 
   if (err) return <div className="alert">{err}</div>;
   if (!d) return <Skeleton />;
 
   const choose = (name, src) => {
     const t = usable.find((x) => x.name === name);
-    setTab('send'); setResults(null); setValues({}); setNameVar(true);
-    if (t) setTplKey(`${t.name}|${t.language}`);
+    setTab('send'); setNameVar(true);
+    pickTemplate(t ? `${t.name}|${t.language}` : '');
     if (src) setSource(src);
     if (src === 'employees' && name === 'employee_welcome') setPicked(Object.fromEntries(d.employees.filter((e) => e.mobile).map((e) => [e._id, true])));
-    if (!t) setNote(`The "${name}" template is not approved yet. Submit it under Templates, then come back.`);
-  };
-  const submitPreset = async (name) => {
-    setNote('');
-    try { const r = await api('/crm/templates', { method: 'POST', body: { preset: name } }); setNote(`Template submitted to Meta (${r.status}). It can be used once approved.`); load(); } catch (e) { setNote(e.message); }
+    if (!t) setNote(`The "${name}" template is not approved yet. Open Templates, start from it, and submit it for approval.`);
   };
   const send = async () => {
     if (!window.confirm(`Send "${tpl.name}" on WhatsApp to ${ready.length} ${ready.length === 1 ? 'person' : 'people'}?`)) return;
@@ -126,7 +132,7 @@ export default function Crm() {
     for (let i = 0; i < ready.length; i += CHUNK) {
       const part = ready.slice(i, i + CHUNK).map((r) => ({ ...r, params: paramsFor(r) }));
       try {
-        const r = await api('/crm/send', { method: 'POST', body: { template: tpl.name, language: tpl.language, purpose: preset?.purpose || 'BULK', batch, recipients: part } });
+        const r = await api('/crm/send', { method: 'POST', body: { template: tpl.name, language: tpl.language, purpose: tpl.purpose || 'BULK', batch, recipients: part, header: headerMedia ? { mediaId: headerMedia._id } : headerText ? { text: headerText } : undefined, buttons: urlButtons.map((b) => ({ index: b.index, text: urlVals[b.index] || '' })) } });
         all.push(...r.results);
       } catch (e) { all.push(...part.map((r) => ({ to: r.phone, name: r.name, status: 'FAILED', error: e.message }))); }
       setProgress({ done: Math.min(i + CHUNK, ready.length), total: ready.length });
@@ -173,6 +179,9 @@ export default function Crm() {
               <div className="card">
                 <h2>Quick start</h2>
                 <div className="row">
+                  <button className="btn" onClick={() => choose('shine_offer', 'paste')}>Send an offer</button>
+                  <button className="btn" onClick={() => choose('shine_sales_brochure', 'paste')}>Send the brochure</button>
+                  <button className="btn" onClick={() => choose('shine_feedback', 'paste')}>Ask for feedback</button>
                   <button className="btn" onClick={() => choose('interview_invite', 'paste')}>Interview invites</button>
                   <button className="btn" onClick={() => choose('employee_welcome', 'employees')}>Welcome all employees</button>
                   <button className="btn" onClick={() => choose('team_update', 'employees')}>Message employees</button>
@@ -183,16 +192,16 @@ export default function Crm() {
                 <h2>1 · Message</h2>
                 {!usable.length ? <p className="muted">No approved templates yet. Submit the ready-made ones under Templates.</p> : (
                   <Field label="Template">
-                    <select value={tplKey} onChange={(e) => { setTplKey(e.target.value); setValues({}); setResults(null); }}>
+                    <select value={tplKey} onChange={(e) => pickTemplate(e.target.value)}>
                       <option value="">Choose…</option>
-                      {usable.map((t) => <option key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>{d.presets.find((p) => p.name === t.name)?.label || t.name} ({t.language})</option>)}
+                      {usable.map((t) => <option key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>{d.presets.find((p) => p.name === t.name)?.label || t.name} ({t.language}){t.media ? ` · ${MEDIA_KIND[t.media]}` : ''}</option>)}
                     </select>
                   </Field>
                 )}
                 {tpl && tpl.vars > 0 && (
                   <div className="form two" style={{ marginTop: 12 }}>
                     {Array.from({ length: tpl.vars }, (_, i) => i + 1).map((n) => (
-                      <Field key={n} label={preset?.fields?.[n - 1] || `Value {{${n}}}`} hint={n === 1 ? undefined : 'Same for everyone'}>
+                      <Field key={n} label={tpl.fields?.[n - 1] || `Value {{${n}}}`} hint={n === 1 ? undefined : 'Same for everyone'}>
                         {n === 1 && (
                           <label className="check"><input type="checkbox" checked={nameVar} onChange={(e) => setNameVar(e.target.checked)} /> Use each person&apos;s first name</label>
                         )}
@@ -200,7 +209,26 @@ export default function Crm() {
                       </Field>))}
                   </div>
                 )}
-                {tpl && <pre className="wa-preview">{fill(tpl.body, paramsFor(ready[0] || { name: 'Rahul' }))}</pre>}
+                {tpl?.media && (
+                  <div style={{ marginTop: 14 }}>
+                    <label>Header {MEDIA_KIND[tpl.media].toLowerCase()} (same for everyone)</label>
+                    <MediaLibrary items={d.media || []} kind={tpl.media} picked={headerMedia?._id} onPick={setHeaderMedia}
+                      onChange={(item) => { if (item) setHeaderMedia(item); load(); }} />
+                  </div>
+                )}
+                {tpl?.header?.vars > 0 && (
+                  <Field label="Header value" hint={`Header: ${tpl.header.text}`}><input value={headerText} onChange={(e) => setHeaderText(e.target.value)} maxLength={60} /></Field>
+                )}
+                {urlButtons.map((b) => (
+                  <Field key={b.index} label={`Link for the "${b.text}" button`} hint={`${b.url.replace('{{1}}', '…')} — the end of the link, same for everyone`}>
+                    <input value={urlVals[b.index] || ''} onChange={(e) => setUrlVals({ ...urlVals, [b.index]: e.target.value })} maxLength={500} />
+                  </Field>))}
+                {tpl && (
+                  <div style={{ marginTop: 14, maxWidth: 380 }}>
+                    <WaPreview header={tpl.header ? { ...tpl.header, text: fill(tpl.header.text, [headerText]) } : null} mediaName={headerMedia?.name}
+                      body={fill(tpl.body, paramsFor(ready[0] || { name: 'Rahul' }))} footer={tpl.footer} buttons={tpl.buttons} />
+                  </div>
+                )}
               </div>
 
               <div className="card">
@@ -230,7 +258,7 @@ export default function Crm() {
 
               <div className="savebar">
                 <span className="muted small" style={{ marginRight: 'auto' }}>
-                  {progress ? `Sending… ${progress.done} of ${progress.total}` : !tpl ? 'Choose a template' : missing.length ? 'Fill in every value' : `${ready.length} recipient${ready.length === 1 ? '' : 's'}`}
+                  {progress ? `Sending… ${progress.done} of ${progress.total}` : !tpl ? 'Choose a template' : missing.length ? `Still needed: ${missing.slice(0, 3).map((m) => (typeof m === 'number' ? (tpl.fields?.[m - 1] || `value {{${m}}}`) : m)).join(', ')}` : `${ready.length} recipient${ready.length === 1 ? '' : 's'}`}
                 </span>
                 <button className="btn primary" disabled={!!progress || !tpl || missing.length > 0 || !ready.length} onClick={send}>{progress ? 'Sending…' : 'Send on WhatsApp'}</button>
               </div>
@@ -245,24 +273,7 @@ export default function Crm() {
             </>
           )}
 
-          {tab === 'templates' && (
-            <>
-              <div className="card">
-                <h2>Ready-made templates</h2>
-                <p className="muted small" style={{ marginTop: 0 }}>WhatsApp only allows approved templates for the first message to someone. Submit these once; Meta usually approves within minutes to a day.</p>
-                {d.presets.map((p) => (
-                  <div key={p.name} className="wa-tpl">
-                    <div className="row between"><b>{p.label}</b>{p.status ? <Badge tone={tone(p.status)}>{p.status}</Badge> : <button className="btn sm primary" onClick={() => submitPreset(p.name)}>Submit for approval</button>}</div>
-                    <pre className="wa-preview">{p.text}</pre>
-                  </div>))}
-              </div>
-              <div className="card">
-                <h2>All templates on this account</h2>
-                {d.templates.map((t) => (
-                  <div key={`${t.name}|${t.language}`} className="row between wa-row"><span>{t.name} <span className="muted small">{t.language} · {t.category}{t.status === 'APPROVED' && !t.usable ? ' · needs media/buttons (not supported here)' : ''}</span></span><Badge tone={tone(t.status)}>{t.status}</Badge></div>))}
-              </div>
-            </>
-          )}
+          {tab === 'templates' && <TemplatesTab d={d} load={load} setNote={setNote} />}
 
           {tab === 'history' && (
             <div className="card">
@@ -270,7 +281,7 @@ export default function Crm() {
               {!d.history.length && <p className="muted">Nothing sent yet.</p>}
               {d.history.map((m) => (
                 <div key={m._id} className="row between wa-row">
-                  <span>{m.direction === 'IN' && '↩ '}{m.name || m.to} <span className="muted small">{m.to} · {m.direction === 'IN' ? 'reply' : m.template} · {fmtDateTime(m.createdAt)}</span>
+                  <span>{m.direction === 'IN' && '↩ '}{m.name || m.to} <span className="muted small">{m.to} · {m.direction === 'IN' ? 'reply' : m.template}{m.media ? ` + ${m.media}` : ''} · {fmtDateTime(m.createdAt)}</span>
                     {m.text && <div className="small">{m.text}</div>}{m.error && <div className="muted small">{m.error}</div>}</span>
                   <Badge tone={tone(m.status)}>{{ SENT: 'Sent', DELIVERED: 'Delivered', READ: 'Read', FAILED: 'Failed', RECEIVED: 'Reply' }[m.status] || m.status}</Badge>
                 </div>))}

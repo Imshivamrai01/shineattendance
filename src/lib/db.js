@@ -15,6 +15,7 @@ import '../models/Counter.js';
 import '../models/Task.js';
 import '../models/Notification.js';
 import '../models/WaMessage.js';
+import '../models/WaMedia.js';
 import '../models/Lead.js';
 import '../models/LeadActivity.js';
 import '../models/ScrapeJob.js';
@@ -126,6 +127,7 @@ export const M = {
   get Task() { return model('Task'); },
   get Notification() { return model('Notification'); },
   get WaMessage() { return model('WaMessage'); },
+  get WaMedia() { return model('WaMedia'); },
   get Lead() { return model('Lead'); },
   get LeadActivity() { return model('LeadActivity'); },
   get ScrapeJob() { return model('ScrapeJob'); },

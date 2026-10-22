@@ -8,6 +8,7 @@ const S = new Schema({
   name: String,
   user: { type: Schema.Types.ObjectId, ref: 'User' }, // set when the recipient is an employee
   template: String, language: String, params: [String],
+  media: String, // header file sent with the template (library file name)
   status: { type: String, enum: ['SENT', 'DELIVERED', 'READ', 'FAILED', 'RECEIVED'], required: true },
   waId: String, error: String,
   direction: { type: String, enum: ['OUT', 'IN'], default: 'OUT' }, text: String, // IN = a reply someone sent to the business number

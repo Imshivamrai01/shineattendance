@@ -11,6 +11,8 @@ const S = new mongoose.Schema({
   notificationEmail: String,
   // WhatsApp Cloud API (CRM page). The token never leaves the server.
   waPhoneId: String, waBusinessId: String, waToken: String,
+  // Meta app of the token (template sample uploads need it), and per template the CRM's own labels for its values: { name: { fields, purpose } }
+  waAppId: String, waTemplateMeta: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Meta webhook: the verify token typed into Meta's Callback URL form, and the app secret that signs each delivery (optional)
   waVerifyToken: String, waAppSecret: String,
   // Google Places API key for the Sales lead finder (OpenStreetMap is used without it). Never sent to the browser.
