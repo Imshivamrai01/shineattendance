@@ -19,6 +19,7 @@ export function startWaMock(port) {
       const path = req.url.split('?')[0];
       if (req.method === 'GET' && path === '/111111111') return send(200, { display_phone_number: '+91 90000 11111', verified_name: 'Shine Infosolutions', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_250' });
       if (req.method === 'GET' && path === '/222222222/message_templates') return send(200, { data: TEMPLATES });
+      if (req.method === 'GET' && path === '/222222222/phone_numbers') return send(200, { data: [{ id: '111111111', display_phone_number: '+91 90000 11111' }] });
       if (req.method === 'POST' && path === '/222222222/message_templates') return send(200, { id: '1', status: 'PENDING', category: 'UTILITY' });
       if (req.method === 'POST' && path === '/111111111/messages') {
         const body = JSON.parse(raw);

@@ -1,7 +1,7 @@
 import { M, getSettings } from '@/lib/db';
 import { handler, readJson, bad } from '@/lib/http';
 import { audit } from '@/lib/audit';
-import { accountInfo } from '@/lib/whatsapp';
+import { checkAccount } from '@/lib/whatsapp';
 
 // Save the WhatsApp Cloud API details. They are checked against Meta first; the token is stored server-side only.
 export const POST = handler(async (ctx) => {
@@ -16,7 +16,7 @@ export const POST = handler(async (ctx) => {
   if (!/^\d{6,25}$/.test(next.waPhoneId) || !/^\d{6,25}$/.test(next.waBusinessId)) throw bad('Phone number ID and WhatsApp Business Account ID are the long numbers from the Meta dashboard');
   if (!next.waToken || next.waToken.length < 50) throw bad('Paste the access token');
   let account;
-  try { account = await accountInfo(next); } catch (e) { throw bad(e.message); }
+  try { account = await checkAccount(next); } catch (e) { throw bad(e.message); }
   await M.Setting.updateOne({ key: 'system' }, { $set: next });
   await audit(ctx, { action: 'CHANGED_WHATSAPP_SETTINGS', entityType: 'Setting', entityId: 'whatsapp',
     oldData: { phoneId: cur.waPhoneId, businessId: cur.waBusinessId }, newData: { phoneId: next.waPhoneId, businessId: next.waBusinessId, tokenChanged: next.waToken !== cur.waToken, appSecretChanged: next.waAppSecret !== (cur.waAppSecret || ''), number: account.number } });

@@ -147,7 +147,7 @@ export default function Crm() {
       {mode === 'whatsapp' && <>
       {note && <div className="alert ok">{note}</div>}
       {(!d.configured || showConnect) && <Connect d={d} onSaved={(m) => { setNote(m); setShowConnect(false); load(); }} />}
-      {d.error && <div className="alert">{d.error}</div>}
+      {d.error && <div className="alert">{d.error}{d.configured && !showConnect && <> <button className="linkish" onClick={() => setShowConnect(true)}>Open WhatsApp settings</button></>}</div>}
       {d.account && (
         <div className="card">
           <div className="row between">

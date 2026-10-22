@@ -61,6 +61,28 @@ export async function accountInfo(settings) {
     test: /^\+?1\s*555/.test(p.display_phone_number || '') || p.verified_name === 'Test Number' };
 }
 
+/**
+ * Checks the Phone number ID and the WhatsApp Business Account ID separately, so the error says which one is wrong,
+ * and that the number really belongs to that account. Returns accountInfo().
+ */
+export async function checkAccount(settings) {
+  let account;
+  try { account = await accountInfo(settings); } catch (e) {
+    if (e.wa?.code === 100) throw new Error(`Phone number ID ${settings.waPhoneId} is not a phone number this token can use. Copy the Phone number ID shown under the number in WhatsApp → API Setup.`);
+    throw e;
+  }
+  let numbers;
+  try { numbers = (await graph(settings, `${settings.waBusinessId}/phone_numbers?fields=id,display_phone_number&limit=100`)).data || []; } catch (e) {
+    if (e.wa?.code === 100) throw new Error(`WhatsApp Business Account ID ${settings.waBusinessId} is wrong for this token. Use the "Messaging Account ID" shown above the number in WhatsApp → Production setup (not the App ID or the Business portfolio ID), and make sure the token's system user has that WhatsApp account assigned.`);
+    throw e;
+  }
+  if (!numbers.some((n) => String(n.id) === String(settings.waPhoneId))) {
+    const list = numbers.map((n) => `${n.display_phone_number} (ID ${n.id})`).join(', ') || 'none';
+    throw new Error(`${account.number} is not in WhatsApp Business Account ${settings.waBusinessId}. Numbers in that account: ${list}.`);
+  }
+  return account;
+}
+
 export async function listTemplates(settings) {
   const out = await graph(settings, `${settings.waBusinessId}/message_templates?fields=name,status,language,category,components&limit=100`);
   return (out.data || []).map((t) => ({ name: t.name, language: t.language, status: t.status, category: t.category, body: bodyOf(t), vars: varCount(bodyOf(t)), usable: t.status === 'APPROVED' && simple(t) }))
