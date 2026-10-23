@@ -7,6 +7,7 @@ import { ConfirmModal, TempPassword, Skeleton } from '@/components/ui';
 import AttendanceHistory from '@/components/AttendanceHistory';
 import ProfileCard from '@/components/ProfileCard';
 import TaskHistory from '@/components/TaskHistory';
+import { StaffCallButtons, StaffCallHistory } from '@/components/StaffCall';
 
 const ALL = ['name', 'email', 'mobile', 'fatherName', 'motherName', 'dob', 'address', 'city', 'state', 'pincode', 'emergencyContact1', 'emergencyContact2',
   'designation', 'joiningDate', 'employeeType', 'department', 'manager', 'hr', 'location', 'employeeId'];
@@ -41,6 +42,7 @@ export default function UserDetail({ params }) {
   const isAdmin = me.role === 'ADMIN';
   const canManagerEdit = (me.role === 'MANAGER' || me.role === 'COO') && d.canEdit && u._id !== me._id;
   const canHrRequest = ['HR', 'MANAGER', 'COO'].includes(me.role) && d.canEdit && u._id !== me._id;
+  const canCall = me.role !== 'EMPLOYEE' && u.role !== 'ADMIN' && u._id !== me._id && u.status === 'ACTIVE' && (isAdmin || d.canEdit);
   const byField = {};
   for (const v of d.versions) (byField[v.field] ||= []).push(v);
 
@@ -53,6 +55,7 @@ export default function UserDetail({ params }) {
         {isAdmin && <Link className="btn primary" href={`/users/${id}/edit`}>Edit</Link>}
         {canManagerEdit && <Link className="btn primary" href={`/users/${id}/edit?mode=direct`}>Edit assignment</Link>}
         {canHrRequest && <Link className="btn" href={`/users/${id}/edit?mode=request`}>{me.role === 'MANAGER' ? 'Request profile change (to COO)' : me.role === 'COO' ? 'Request profile change (to Admin)' : 'Request profile change'}</Link>}
+        {canCall && <StaffCallButtons person={u} />}
         {isAdmin && u.role !== 'ADMIN' && (u.status === 'ACTIVE'
           ? <button className="btn" onClick={() => setStatus('INACTIVE')}>Deactivate</button>
           : <button className="btn" onClick={() => setStatus('ACTIVE')}>Reactivate</button>)}
@@ -78,6 +81,7 @@ export default function UserDetail({ params }) {
         </tbody></table>
       </div>
 
+      {me.role !== 'EMPLOYEE' && u._id !== me._id && <StaffCallHistory userId={id} />}
       {u.role !== 'ADMIN' && <TaskHistory userId={id} />}
       {u.role !== 'ADMIN' && <AttendanceHistory userId={id} />}
 

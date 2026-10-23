@@ -9,6 +9,7 @@ import CameraCapture from '@/components/CameraCapture';
 import { label12, minutesText } from '@/lib/hours';
 import { quoteOfTheDay } from '@/lib/quotes';
 import { taskTone } from '@/lib/taskScore';
+import { StaffCallButtons } from '@/components/StaffCall';
 
 // Phone GPS improves over the first seconds. Watch for up to `ms`, keep the most accurate fix,
 // and stop early once a fix is good enough.
@@ -254,7 +255,7 @@ function Overview({ me, d }) {
           <div className="row between"><h2>{d.today.closed ? 'Absent today' : 'Not checked in yet'}</h2><span className="muted small">{c.absentToday} total</span></div>
           {o.absent.length === 0 ? <p className="muted">{c.team ? 'Everyone has checked in.' : 'No one to show yet.'}</p> : o.absent.map((p) => (
             <Person key={p.id} name={p.name} sub={`${p.employeeId || ''}${p.department ? ` · ${p.department}` : ''}`}
-              right={<>{d.today.closed && <Badge tone="bad">Absent</Badge>}<Link className="small" href={`/users/${p.id}`}>Open</Link></>} />
+              right={<>{d.today.closed && <Badge tone="bad">Absent</Badge>}<StaffCallButtons person={{ _id: p.id, name: p.name }} small /><Link className="small" href={`/users/${p.id}`}>Open</Link></>} />
           ))}
           {c.absentToday > o.absent.length && <p className="muted small" style={{ marginBottom: 0 }}>+ {c.absentToday - o.absent.length} more</p>}
         </div>

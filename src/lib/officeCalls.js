@@ -14,7 +14,7 @@ import { aiConfigured, dialable } from './aiCalls.js';
 const LIVE = ['CALLING_AGENT', 'RINGING_LEAD', 'CONNECTED'];
 
 /** Can this person call through the office line? { enabled, hasMobile, reason } */
-const callerPhone = (user) => dialable(user.callMobile) || dialable(user.mobile);
+export const callerPhone = (user) => dialable(user.callMobile) || dialable(user.mobile);
 
 export async function officeLine(user) {
   const s = await getSettings();
@@ -25,7 +25,7 @@ export async function officeLine(user) {
   return { enabled: true, hasMobile: true, mobile: `••••••${mobile.slice(-4)}` };
 }
 
-function voiceFetch(path, body) {
+export function voiceFetch(path, body) {
   return fetch(`${process.env.VOICE_API_URL.replace(/\/$/, '')}${path}`, {
     method: 'POST', headers: { authorization: `Bearer ${process.env.AI_WEBHOOK_SECRET}`, 'content-type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(20000),

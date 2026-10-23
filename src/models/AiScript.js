@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
-export const AI_KINDS = ['SALES', 'INTERVIEW', 'FEEDBACK', 'OTHER'];
+export const AI_KINDS = ['SALES', 'INTERVIEW', 'FEEDBACK', 'ATTENDANCE', 'OTHER'];
 
 // A call type for the AI agent ("Sales", "Interview invite", "Feedback"): what it says first, how to pitch,
 // and what to find out. Edited in plain words by the team; the agent reads it at the start of every call.

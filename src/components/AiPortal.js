@@ -29,7 +29,7 @@ const SARVAM_VOICES = [['simran_enhi_customer', 'Simran: Hinglish, friendly'], [
   ['ritu_hi_customer', 'Ritu: Hindi'], ['simran_hi_assistant', 'Simran: Hindi, assistant'], ['neha_en_customer', 'Neha: Indian English'],
   ['simran_en_customer', 'Simran: Indian English'], ['shubh_enhi_ads', 'Shubh (male): Hinglish']];
 
-const KINDS = [['SALES', 'Sales (creates / updates sales leads)'], ['INTERVIEW', 'Interview invite'], ['FEEDBACK', 'Feedback'], ['OTHER', 'Other']];
+const KINDS = [['SALES', 'Sales (creates / updates sales leads)'], ['INTERVIEW', 'Interview invite'], ['FEEDBACK', 'Feedback'], ['ATTENDANCE', 'Attendance check (calls to employees)'], ['OTHER', 'Other']];
 
 /** Call types (Sales, Interview invite, Feedback...) and company info for the agent. */
 export function useAgentSetup() {
@@ -41,7 +41,7 @@ export function useAgentSetup() {
 
 /** Call type dropdown. `kinds` limits the choices (e.g. no Sales on the CRM page). */
 export function ScriptSelect({ scripts, value, onChange, kinds, hint = true }) {
-  const list = (scripts || []).filter((x) => x.active !== false && (!kinds || kinds.includes(x.kind)));
+  const list = (scripts || []).filter((x) => x.active !== false && (kinds ? kinds.includes(x.kind) : x.kind !== 'ATTENDANCE'));
   useEffect(() => { if (!value && list[0]) onChange(list[0]._id); }, [value, list, onChange]);
   return (
     <Field label="Call type" hint={hint ? 'What the agent says on this call. Edit it under Agent setup.' : undefined}>

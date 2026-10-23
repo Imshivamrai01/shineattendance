@@ -57,6 +57,11 @@ const optedOut = (lead) => lead.status === 'NOT_INTERESTED' && /asked not to be 
 
 // ---- Call types ("scripts"): what the agent says on a Sales / Interview invite / Feedback call ----
 
+// Calls to employees from the people pages (lib/staffCalls.js): "you didn't come in today, why?"
+const ATTENDANCE_SCRIPT = { name: 'Attendance check', kind: 'ATTENDANCE', opening: 'Namaste {name} ji! Main {company} ki HR team se bol rahi hoon. Aaj aap office nahi aaye, sab theek hai?',
+  instructions: 'You are calling an employee of the company, not a customer, because they did not come to the office (see the reason for the call). Be polite and caring, never rude or accusing. Ask why they did not come, whether they told their manager or applied for leave, and when they will come back to the office. If they are unwell or have an emergency, wish them well. Never approve or refuse leave and never talk about salary or action against them: say HR or their manager will look into it. Do not pitch anything and do not transfer the call. Once you know the reason and the day they will be back, thank them and end the call.',
+  collect: 'Why they did not come, whether they informed their manager or applied for leave, and the date they will be back in the office.' };
+
 const DEFAULT_SCRIPTS = [
   { name: 'Sales', kind: 'SALES', opening: 'Namaste {name} ji! Main {company} se bol rahi hoon. Kya aapke paas do minute hain?',
     instructions: 'Introduce the company in one line. Ask what they need and explain how we can help, using only the company information. Offer a demo or a call back from the sales team.',
@@ -67,16 +72,18 @@ const DEFAULT_SCRIPTS = [
   { name: 'Feedback', kind: 'FEEDBACK', opening: 'Namaste {name} ji! Main {company} se bol rahi hoon. Hamari service ke baare mein do minute ka feedback lena tha.',
     instructions: 'Thank them for being a customer. Ask how their experience was, ask for a rating from 1 to 5, and ask what we can improve. If they have a complaint, apologise and say the team will call back.',
     collect: 'Rating from 1 to 5, what they liked, what to improve, and any complaint that needs a call back.' },
+  ATTENDANCE_SCRIPT,
 ];
 
 /** Call types, oldest first. The three defaults are created the first time anyone looks. */
 export async function aiScripts({ all = false } = {}) {
   if (!(await M.AiScript.countDocuments())) await M.AiScript.insertMany(DEFAULT_SCRIPTS);
+  else if (!(await M.AiScript.exists({ kind: 'ATTENDANCE' }))) await M.AiScript.create(ATTENDANCE_SCRIPT); // added after the first three
   return M.AiScript.find(all ? {} : { active: true }).sort({ createdAt: 1 }).lean();
 }
 
 /** The chosen call type, or the first Sales one. */
-async function pickScript(id) {
+export async function pickScript(id) {
   const s = id && mongoose.isValidObjectId(id) ? await M.AiScript.findById(id).lean() : null;
   if (s) return s;
   const list = await aiScripts();
@@ -86,7 +93,7 @@ async function pickScript(id) {
 const scriptFields = (script) => (script ? { script: script._id, scriptName: script.name, kind: script.kind } : { kind: 'SALES' });
 
 /** Ask the voice worker to dial; returns the carrier call id. `target` = { id (lead), name }. */
-async function requestDial(target, to, purpose, requestedBy, scriptId) {
+export async function requestDial(target, to, purpose, requestedBy, scriptId) {
   const [script, settings] = await Promise.all([scriptId ? M.AiScript.findById(scriptId).lean() : pickScript(), getSettings()]);
   const res = await voiceFetch('/api/call', {
     method: 'POST',
@@ -319,6 +326,7 @@ export async function ingestAiEvent(ev) {
 
 /** Interview / feedback calls: tell whoever started them; log on the lead if there is one, but never move the pipeline. */
 async function reportNonSales(call) {
+  if (call.kind === 'ATTENDANCE') return reportStaffCall(call);
   if (call.lead) {
     await M.LeadActivity.create({ lead: call.lead, type: 'AI_CALL', aiCall: call._id, phone: call.phone, durationSec: call.durationSec, endedAt: call.endedAt,
       by: call.requestedBy, outcome: (call.transcript || []).some((m) => m.role === 'user') ? 'CONNECTED' : 'NO_ANSWER',
@@ -330,6 +338,19 @@ async function reportNonSales(call) {
   const result = call.kind === 'INTERVIEW' ? (call.accepted === true ? `accepted the interview${at}` : call.accepted === false ? 'cannot attend' : 'did not confirm')
     : call.kind === 'FEEDBACK' ? (call.rating ? `rated ${call.rating}/5` : 'gave feedback') : 'finished the call';
   note([call.requestedBy], { title: `${call.scriptName || 'AI call'}: ${who} ${result}`, body: call.summary || '', link: `/sales?tab=ai&call=${call._id}` });
+}
+
+/** Attendance calls to employees: save what they said on the StaffCall and tell whoever asked. */
+async function reportStaffCall(call) {
+  const spoke = (call.transcript || []).some((m) => m.role === 'user');
+  const back = call.appointmentAt ? ` Back on ${call.appointmentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })}.` : '';
+  const reason = spoke ? `${call.summary || call.requirement || ''}${back}`.trim().slice(0, 1000) : '';
+  const status = call.status === 'FAILED' ? 'FAILED' : spoke ? 'COMPLETED' : 'NO_ANSWER';
+  const sc = await M.StaffCall.findOneAndUpdate({ aiCall: call._id }, { $set: { status, reason, durationSec: call.durationSec } }, { new: true }).populate('employee', 'name');
+  if (!sc) return;
+  const who = sc.employee?.name || call.contactName || call.phone;
+  note([sc.by], { title: status === 'COMPLETED' ? `AI call: ${who} answered` : `AI call: ${who} did not ${status === 'FAILED' ? 'get the call' : 'answer'}`,
+    body: reason || call.hangupCause || '', link: `/users/${sc.employee?._id || sc.employee}` });
 }
 
 async function applyToLead(call) {
@@ -414,7 +435,13 @@ export async function syncMissingRecordings({ limit = 15 } = {}) {
     const r = await syncOne(a.bridge.callId, 'bridge');
     if (r) { a.bridge.recordingId = r.id; a.bridge.recordingDurationSec = r.durationSec; a.markModified('bridge'); await a.save(); synced++; }
   }
-  return { synced, checked: calls.length + acts.length };
+  // Office-line calls to employees (lib/staffCalls.js)
+  const staff = await M.StaffCall.find({ 'bridge.status': 'ENDED', 'bridge.recordingId': { $exists: false }, createdAt: { $gt: week }, updatedAt: { $lt: settled } }).limit(limit);
+  for (const a of staff) {
+    const r = await syncOne(a.bridge.callId, 'bridge');
+    if (r) { a.bridge.recordingId = r.id; a.bridge.recordingDurationSec = r.durationSec; a.markModified('bridge'); await a.save(); synced++; }
+  }
+  return { synced, checked: calls.length + acts.length + staff.length };
 }
 
 const PROVIDER_NAMES = { rumik: 'Rumik (voice)', sarvam: 'Sarvam (voice)', deepgram: 'Deepgram (listening)', groq: 'Groq (thinking)' };

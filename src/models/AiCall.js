@@ -16,7 +16,8 @@ const S = new Schema({
   lead: { type: Schema.Types.ObjectId, ref: 'Lead', index: true },
   contactName: { type: String, maxlength: 120 }, // for calls to people who are not sales leads (CRM page: candidates, customers)
   script: { type: Schema.Types.ObjectId, ref: 'AiScript' }, scriptName: String,
-  kind: { type: String, enum: ['SALES', 'INTERVIEW', 'FEEDBACK', 'OTHER'], default: 'SALES', index: true },
+  kind: { type: String, enum: ['SALES', 'INTERVIEW', 'FEEDBACK', 'ATTENDANCE', 'OTHER'], default: 'SALES', index: true },
+  employee: { type: Schema.Types.ObjectId, ref: 'User', index: true }, // ATTENDANCE calls: the employee rung (StaffCall)
   requestedBy: { type: Schema.Types.ObjectId, ref: 'User' }, // who pressed "AI call" (outbound from the CRM)
   purpose: { type: String, maxlength: 300 },
   startedAt: Date, endedAt: Date, durationSec: Number,
