@@ -459,7 +459,7 @@ export function AiPortal({ d }) {
           </>
         )}
       </div>
-      {open && <AiCallDetail id={open} onClose={() => { setOpen(null); window.history.replaceState(null, '', '/sales?tab=ai'); }} onChanged={load} />}
+      {open && <AiCallDetail id={open} onClose={() => { setOpen(null); window.history.replaceState(null, '', '/crm?section=sales&tab=ai'); }} onChanged={load} />}
     </>
   );
 }

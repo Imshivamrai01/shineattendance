@@ -355,7 +355,7 @@ async function reportNonSales(call) {
   const at = call.appointmentAt ? ` for ${call.appointmentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
   const result = call.kind === 'INTERVIEW' ? (call.accepted === true ? `accepted the interview${at}` : call.accepted === false ? 'cannot attend' : 'did not confirm')
     : call.kind === 'FEEDBACK' ? (call.rating ? `rated ${call.rating}/5` : 'gave feedback') : 'finished the call';
-  const link = call.list ? `/crm?section=${call.kind === 'INTERVIEW' ? 'interview' : 'customers'}&list=${call.list}` : `/sales?tab=ai&call=${call._id}`;
+  const link = call.list ? `/crm?section=${call.kind === 'INTERVIEW' ? 'interview' : 'customers'}&list=${call.list}` : `/crm?section=sales&tab=ai&call=${call._id}`;
   note([call.requestedBy], { title: `${call.scriptName || 'AI call'}: ${who} ${result}`, body: call.summary || '', link });
 }
 
@@ -492,7 +492,7 @@ export async function providerAlert(ev) {
   if (!r.modifiedCount) return { alerted: false };
   const admins = await M.User.find({ status: 'ACTIVE', role: { $in: ['ADMIN', 'COO'] } }).distinct('_id');
   const other = provider === 'rumik' ? ' The agent switches to Sarvam for the rest of the call if a Sarvam key is set.' : provider === 'sarvam' ? ' The agent switches to Rumik if its key works.' : '';
-  note(admins, { title: `AI calls: ${PROVIDER_NAMES[provider] || provider} stopped working`, body: `${String(ev.message || '').slice(0, 200)}. Recharge or check the key.${other}`, link: '/sales?tab=ai' });
+  note(admins, { title: `AI calls: ${PROVIDER_NAMES[provider] || provider} stopped working`, body: `${String(ev.message || '').slice(0, 200)}. Recharge or check the key.${other}`, link: '/crm?section=sales&tab=ai' });
   return { alerted: true };
 }
 

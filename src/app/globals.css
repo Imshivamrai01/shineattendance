@@ -912,3 +912,5 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
   .crm-channel { flex: 1; justify-content: center; padding: 9px 10px; }
 }
 @media (prefers-reduced-motion: reduce) { .crm-section, .crm-channel, .switch span[aria-hidden], .switch span[aria-hidden]::after { transition: none; } }
+.crm-subhead { margin-bottom: 14px; }
+.crm-subhead h2 { font-size: 20px; margin: 0; letter-spacing: -.01em; }

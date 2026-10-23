@@ -114,7 +114,7 @@ export default function LeadPage() {
   const [msg, setMsg] = useState('');
   const load = useCallback(() => Promise.all([api(`/sales/leads/${id}`), api('/sales')]).then(([a, b]) => { setD(a); setOverview(b); setErr(''); }).catch((e) => setErr(e.message)), [id]);
   useLive(load, 30000);
-  if (err && !d) return <><Link href="/sales?tab=leads">← Leads</Link><div className="alert" style={{ marginTop: 12 }}>{err}</div></>;
+  if (err && !d) return <><Link href="/crm?section=sales&tab=leads">← Leads</Link><div className="alert" style={{ marginTop: 12 }}>{err}</div></>;
   if (!d || !overview) return <Skeleton />;
   const l = d.lead;
   const manager = overview.role === 'MANAGER';
@@ -126,7 +126,7 @@ export default function LeadPage() {
 
   return (
     <div className="sales">
-      <Link href="/sales?tab=leads" className="back-link">← All leads</Link>
+      <Link href="/crm?section=sales&tab=leads" className="back-link">← All leads</Link>
       <section className="card lead-hero">
         <div className="lh-main">
           <Initials name={l.name} size={56} />

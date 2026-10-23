@@ -65,7 +65,7 @@ export async function ingestTransferEvent(ev) {
   if (!call) return null;
   const t = { ...(call.toObject().transfer || {}) };
   const before = t.status;
-  const link = `/sales?tab=ai&call=${call._id}`;
+  const link = `/crm?section=sales&tab=ai&call=${call._id}`;
 
   if (ev.event === 'call.transfer') {
     const toId = /^[a-f\d]{24}$/i.test(ev.toUserId || '') ? ev.toUserId : null;
