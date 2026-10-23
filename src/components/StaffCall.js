@@ -14,19 +14,25 @@ import { fmtDur } from '@/components/SalesCall';
  */
 
 let lineCache = null; // { enabled, needsNumber, reason, ai } — shared by every button on the page
-const loadLine = () => (lineCache ||= api('/staff-calls/line').catch((e) => { lineCache = null; return { enabled: false, reason: e.message, ai: false }; }));
+export const loadLine = () => (lineCache ||= api('/staff-calls/line').catch((e) => { lineCache = null; return { enabled: false, reason: e.message, ai: false }; }));
 const changed = () => window.dispatchEvent(new Event('staffcalls:changed'));
 
 const OFFICE_TEXT = {
   STARTING: ['Starting the call…', 'warn'], CALLING_AGENT: ['Calling your phone — pick up to be connected', 'warn'],
-  RINGING_LEAD: ['Ringing the employee…', 'warn'], CONNECTED: ['On the call', 'ok'], ENDED: ['Call ended', ''],
+  RINGING_LEAD: ['Ringing them…', 'warn'], CONNECTED: ['On the call', 'ok'], ENDED: ['Call ended', ''],
   NO_ANSWER: ['They did not pick up', 'bad'], BUSY: ['Their line was busy', 'bad'],
-  FAILED: ['The call could not go through', 'bad'], AGENT_NO_ANSWER: ['You did not pick up, so the employee was not called', 'bad'],
+  FAILED: ['The call could not go through', 'bad'], AGENT_NO_ANSWER: ['You did not pick up, so they were not called', 'bad'],
 };
 const LIVE = ['STARTING', 'CALLING_AGENT', 'RINGING_LEAD', 'CONNECTED'];
 
-/** Office-line call in progress: live status, Hang up, then "what did they say". */
-function OfficeCallModal({ person, onClose }) {
+const callEmployee = (person) => () => api(`/users/${person._id}/calls`, { method: 'POST', body: { mode: 'OFFICE' } });
+
+/**
+ * Office-line call in progress: live status, Hang up, then "what did they say". `start()` places the call and resolves
+ * to { call } (a StaffCall); by default it calls the employee `person`.
+ */
+export function OfficeCallModal({ person, start, onClose, noteLabel = 'Why they did not come in / what they said',
+  notePlaceholder = 'Fever since last night, will come on Monday; told the manager on WhatsApp' }) {
   const [c, setC] = useState(null);
   const [err, setErr] = useState('');
   const [now, setNow] = useState(Date.now());
@@ -37,8 +43,8 @@ function OfficeCallModal({ person, onClose }) {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    api(`/users/${person._id}/calls`, { method: 'POST', body: { mode: 'OFFICE' } }).then((d) => { setC(d.call); changed(); }).catch((e) => setErr(e.message));
-  }, [person._id]);
+    (start || callEmployee(person))().then((d) => { setC(d.call); changed(); }).catch((e) => setErr(e.message));
+  }, [person, start]);
   useEffect(() => {
     if (!c?._id || !LIVE.includes(status)) return undefined;
     const t = setInterval(() => api(`/staff-calls/${c._id}`).then((d) => setC(d.call)).catch(() => {}), 1500);
@@ -64,8 +70,8 @@ function OfficeCallModal({ person, onClose }) {
         </div>
       </div>
       {['CONNECTED', 'ENDED'].includes(status) && (
-        <Field label="Why they did not come in / what they said" hint="Saved on their call history. The recording's summary is added automatically if you leave this empty.">
-          <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Fever since last night, will come on Monday; told the manager on WhatsApp" />
+        <Field label={noteLabel} hint="Saved with the call. The recording's summary is added automatically if you leave this empty.">
+          <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={notePlaceholder} />
         </Field>
       )}
       <div className="row modal-actions">
@@ -77,7 +83,7 @@ function OfficeCallModal({ person, onClose }) {
 }
 
 /** First office-line call with no calling number: ask for the phone the call should ring first. */
-function NumberModal({ person, onSaved, onClose }) {
+export function NumberModal({ person, onSaved, onClose }) {
   const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -150,6 +156,22 @@ export function StaffCallButtons({ person, small }) {
       {open === 'NUMBER' && <NumberModal person={person} onSaved={() => { loadLine().then(setLine); setOpen('OFFICE'); }} onClose={() => setOpen(null)} />}
       {open === 'OFFICE' && <OfficeCallModal person={person} onClose={() => setOpen(null)} />}
       {open === 'AI' && <AiCallModal person={person} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+/** One "IVR call" button for anyone: your phone first, then theirs. `start()` places the call (see OfficeCallModal). */
+export function IvrButton({ person, start, small, label = 'Call', noteLabel, notePlaceholder, disabled }) {
+  const [line, setLine] = useState(null);
+  const [open, setOpen] = useState(null); // 'OFFICE' | 'NUMBER'
+  useEffect(() => { loadLine().then(setLine); }, []);
+  const off = line && !line.enabled && !line.needsNumber;
+  return (
+    <>
+      <button type="button" className={`btn ${small ? 'sm' : ''}`} disabled={disabled || !line || off} title={off ? line.reason : 'Your phone rings first, then theirs'}
+        onClick={() => setOpen(line.enabled ? 'OFFICE' : 'NUMBER')}><Icon name="phone" size={14} /> {label}</button>
+      {open === 'NUMBER' && <NumberModal person={person} onSaved={() => { loadLine().then(setLine); setOpen('OFFICE'); }} onClose={() => setOpen(null)} />}
+      {open === 'OFFICE' && <OfficeCallModal person={person} start={start} noteLabel={noteLabel} notePlaceholder={notePlaceholder} onClose={() => setOpen(null)} />}
     </>
   );
 }

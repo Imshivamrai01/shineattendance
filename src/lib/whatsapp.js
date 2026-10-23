@@ -312,6 +312,17 @@ export const PRESETS = {
     text: 'Welcome to Shine Infosolutions, {{1}}!\n\nWe are glad to have you on the team. Your attendance, daily tasks and profile are in the Shine Attendance app: https://attendance.shineinfosolutions.in\n\nPlease check in from the office every day.',
     example: ['Rahul'], fields: ['Employee name'],
   },
+  task_assigned: {
+    label: 'Task assigned (automatic)', category: 'UTILITY', purpose: 'TASK', header: { format: 'NONE' },
+    text: 'Hello {{1}},\n\nA new task has been assigned to you.\n\nTask: {{2}}\nDue: {{3}}\nAssigned by: {{4}}\n\nPlease add your update in the Shine Attendance app before you check out.',
+    example: ['Rahul', 'Call 20 leads from the website list', 'Mon, 26 Oct', 'Priya (HR)'], fields: ['Employee name', 'Task', 'Due', 'Assigned by'],
+    footer: 'Shine Infosolutions',
+  },
+  absent_notice: {
+    label: 'No attendance yet (automatic)', category: 'UTILITY', purpose: 'ABSENT', header: { format: 'NONE' },
+    text: 'Hello {{1}},\n\nWe have not received your attendance for {{2}} yet.\n\nIf you are in the office, please check in on the Shine Attendance app. If you are on leave or running late, please inform your manager or HR.',
+    example: ['Rahul', 'Mon, 26 Oct'], fields: ['Employee name', 'Date'], footer: 'Shine Infosolutions',
+  },
   team_update: {
     label: 'Team update', category: 'UTILITY', purpose: 'BULK', header: { format: 'NONE' },
     text: 'Hello {{1}},\n\nAn update from Shine Infosolutions:\n{{2}}\n\nPlease contact HR if you have any questions.',

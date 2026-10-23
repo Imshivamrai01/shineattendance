@@ -3,7 +3,7 @@ import { handler, readJson, bad } from '@/lib/http';
 import { audit } from '@/lib/audit';
 import { appIdFor, buildTemplate, createTemplate, mediaKind, MEDIA_RULES, uploadMedia, uploadSample, waConfigured } from '@/lib/whatsapp';
 
-const PURPOSES = ['INTERVIEW', 'WELCOME', 'BULK', 'OFFER', 'SALES', 'FEEDBACK'];
+const PURPOSES = ['INTERVIEW', 'WELCOME', 'BULK', 'OFFER', 'SALES', 'FEEDBACK', 'TASK', 'ABSENT', 'BROCHURE'];
 
 /** A file from the form, checked against what WhatsApp accepts for this header type. */
 async function fileFor(form, format) {

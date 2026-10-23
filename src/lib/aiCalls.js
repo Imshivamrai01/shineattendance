@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { phoneKey, applyCallOutcome, rescore, salesTeam, CLOSED } from './sales.js';
 import { note } from './notify.js';
 import { sheetsConfigured, upsertAiCall, aiCallRow } from './sheets.js';
+import { sendBrochure } from './waAuto.js';
 
 /*
  * Bridge between the CRM and the AI voice worker (voice/worker). The worker reports calls to
@@ -82,15 +83,20 @@ export async function aiScripts({ all = false } = {}) {
   return M.AiScript.find(all ? {} : { active: true }).sort({ createdAt: 1 }).lean();
 }
 
-/** The chosen call type, or the first Sales one. */
-export async function pickScript(id) {
+/** The chosen call type, or the first one of `kind` (default Sales). */
+export async function pickScript(id, kind = 'SALES') {
   const s = id && mongoose.isValidObjectId(id) ? await M.AiScript.findById(id).lean() : null;
   if (s) return s;
   const list = await aiScripts();
-  return list.find((x) => x.kind === 'SALES') || list[0] || null;
+  return list.find((x) => x.kind === kind) || list.find((x) => x.kind === 'SALES') || list[0] || null;
 }
 
 const scriptFields = (script) => (script ? { script: script._id, scriptName: script.name, kind: script.kind } : { kind: 'SALES' });
+
+/** The reason typed for a call comes first in the call type's instructions, so the agent talks about that and nothing else. */
+const stickTo = (purpose, instructions = '') => (purpose
+  ? `This call is only about: ${purpose}. Stay on this topic; do not pitch services or bring up anything else unless the person asks. ${instructions}`.slice(0, 3000)
+  : instructions);
 
 /** Ask the voice worker to dial; returns the carrier call id. `target` = { id (lead), name }. */
 export async function requestDial(target, to, purpose, requestedBy, scriptId) {
@@ -103,7 +109,7 @@ export async function requestDial(target, to, purpose, requestedBy, scriptId) {
       lead: { id: target.id ? String(target.id) : undefined, name: target.name || '', purpose: purpose || '' },
       company: settings.aiCompanyInfo || '',
       voice: { provider: settings.aiVoiceProvider || 'auto', sarvamSpeaker: settings.aiSarvamSpeaker || '' },
-      script: script && { name: script.name, kind: script.kind, opening: script.opening || '', instructions: script.instructions || '', collect: script.collect || '' },
+      script: script && { name: script.name, kind: script.kind, opening: script.opening || '', instructions: stickTo(purpose, script.instructions), collect: script.collect || '' },
     }),
     signal: AbortSignal.timeout(20000),
   });
@@ -181,14 +187,15 @@ export async function queueAiCalls(ctx, leadIds, { purpose = '', scriptId } = {}
 }
 
 /**
- * CRM page: call people who are not sales leads (interview candidates, customers for feedback).
- * `contacts` = [{ name, phone }]. Numbers that asked not to be called before are skipped.
+ * CRM page: call people who are not sales leads (interview candidates, customers for feedback, employees).
+ * `contacts` = [{ name, phone, list?, contact?, employee?, purpose? }] (`purpose` overrides the shared one for that person).
+ * Numbers that asked not to be called before are skipped. Returns { queued, skipped, calls }.
  */
-export async function queueContacts(ctx, contacts, { purpose = '', scriptId } = {}) {
+export async function queueContacts(ctx, contacts, { purpose = '', scriptId, kind = 'SALES' } = {}) {
   const list = (contacts || []).slice(0, QUEUE_LIMIT + 1);
   if (!list.length) throw bad('Add at least one name and number');
   if (list.length > QUEUE_LIMIT) throw bad(`At most ${QUEUE_LIMIT} people at a time`);
-  const script = await pickScript(scriptId);
+  const script = await pickScript(scriptId, kind);
   const keys = list.map((c) => phoneKey(c.phone));
   const [blocked, busy] = await Promise.all([
     M.AiCall.find({ phoneKey: { $in: keys }, optOut: true }).distinct('phoneKey'),
@@ -200,20 +207,23 @@ export async function queueContacts(ctx, contacts, { purpose = '', scriptId } = 
     const why = !to ? 'not an Indian mobile number' : seen.has(key) ? 'listed twice' : blocked.includes(key) ? 'asked not to be called' : busy.includes(key) ? 'already on the call list' : '';
     if (why) { skipped.push({ name: name || c.phone, reason: why }); continue; }
     seen.add(key);
-    docs.push({ callId: `list-${new mongoose.Types.ObjectId()}`, direction: 'outbound', status: 'SCHEDULED', phone: to, phoneKey: key,
-      contactName: name, requestedBy: ctx.user._id, purpose: String(purpose).slice(0, 300), ...scriptFields(script) });
+    docs.push({ _id: new mongoose.Types.ObjectId(), callId: `list-${new mongoose.Types.ObjectId()}`, direction: 'outbound', status: 'SCHEDULED', phone: to, phoneKey: key,
+      contactName: name, requestedBy: ctx.user._id, purpose: String(c.purpose || purpose).slice(0, 300), ...scriptFields(script),
+      ...(c.list ? { list: c.list, contact: c.contact } : {}), ...(c.employee ? { employee: c.employee } : {}) });
   }
   if (docs.length) {
     await M.AiCall.insertMany(docs);
     defer(() => dialNext().catch((e) => console.error('AI dialer:', e.message)));
   }
-  return { queued: docs.length, skipped };
+  return { queued: docs.length, skipped, calls: docs };
 }
 
 /** Take waiting calls off the list. Managers clear everyone's, agents their own. */
 export async function cancelQueued(ctx) {
   const f = { status: 'SCHEDULED', ...(ctx.sales === 'MANAGER' ? {} : { requestedBy: ctx.user._id }) };
-  const r = await M.AiCall.updateMany(f, { $set: { status: 'CANCELLED', hangupCause: `Removed from the list by ${ctx.user.name}` } });
+  const ids = await M.AiCall.find(f).distinct('_id');
+  const r = await M.AiCall.updateMany({ _id: { $in: ids }, status: 'SCHEDULED' }, { $set: { status: 'CANCELLED', hangupCause: `Removed from the list by ${ctx.user.name}` } });
+  await M.StaffCall.updateMany({ aiCall: { $in: ids }, status: 'IN_PROGRESS' }, { $set: { status: 'FAILED', note: 'Taken off the AI call list' } });
   return { cancelled: r.modifiedCount };
 }
 
@@ -234,7 +244,7 @@ export async function dialNext() {
     const lead = next.lead ? await M.Lead.findById(next.lead).lean() : null;
     const why = next.lead ? (!lead ? 'lead was deleted' : skipReason(lead))
       : (await M.AiCall.exists({ phoneKey: next.phoneKey, optOut: true })) ? 'asked not to be called' : '';
-    if (why) { await M.AiCall.updateOne({ _id: next._id }, { $set: { status: 'CANCELLED', hangupCause: `Skipped: ${why}` } }); continue; }
+    if (why) { await M.AiCall.updateOne({ _id: next._id }, { $set: { status: 'CANCELLED', hangupCause: `Skipped: ${why}` } }); await failStaff(next._id, `Skipped: ${why}`); continue; }
     try {
       const target = lead ? { id: lead._id, name: lead.name } : { name: next.contactName };
       const callId = await requestDial(target, next.phone, next.purpose, next.requestedBy, next.script);
@@ -242,15 +252,22 @@ export async function dialNext() {
       const reported = await M.AiCall.findOne({ callId });
       if (reported) {
         await M.AiCall.updateOne({ _id: reported._id }, { $set: { lead: next.lead, contactName: next.contactName, requestedBy: next.requestedBy, purpose: next.purpose,
-          script: next.script, scriptName: next.scriptName, kind: next.kind } });
+          script: next.script, scriptName: next.scriptName, kind: next.kind, employee: next.employee, list: next.list, contact: next.contact } });
+        await M.StaffCall.updateMany({ aiCall: next._id }, { $set: { aiCall: reported._id } });
         await M.AiCall.deleteOne({ _id: next._id });
       } else await M.AiCall.updateOne({ _id: next._id }, { $set: { callId, startedAt: new Date() } });
       dialled++;
     } catch (e) {
       await M.AiCall.updateOne({ _id: next._id }, { $set: { status: 'FAILED', outcome: 'FAILED', hangupCause: String(e.message).slice(0, 200), endedAt: new Date() } });
+      await failStaff(next._id, String(e.message).slice(0, 200));
     }
   }
   return { dialled };
+}
+
+/** A queued call to an employee or list contact that never went out. */
+async function failStaff(aiCallId, why) {
+  await M.StaffCall.updateMany({ aiCall: aiCallId, status: 'IN_PROGRESS' }, { $set: { status: 'FAILED', note: why } });
 }
 
 /** What the call list looks like now (for the AI Portal). */
@@ -327,6 +344,7 @@ export async function ingestAiEvent(ev) {
 /** Interview / feedback calls: tell whoever started them; log on the lead if there is one, but never move the pipeline. */
 async function reportNonSales(call) {
   if (call.kind === 'ATTENDANCE') return reportStaffCall(call);
+  if (call.list) await reportListContact(call);
   if (call.lead) {
     await M.LeadActivity.create({ lead: call.lead, type: 'AI_CALL', aiCall: call._id, phone: call.phone, durationSec: call.durationSec, endedAt: call.endedAt,
       by: call.requestedBy, outcome: (call.transcript || []).some((m) => m.role === 'user') ? 'CONNECTED' : 'NO_ANSWER',
@@ -337,7 +355,23 @@ async function reportNonSales(call) {
   const at = call.appointmentAt ? ` for ${call.appointmentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : '';
   const result = call.kind === 'INTERVIEW' ? (call.accepted === true ? `accepted the interview${at}` : call.accepted === false ? 'cannot attend' : 'did not confirm')
     : call.kind === 'FEEDBACK' ? (call.rating ? `rated ${call.rating}/5` : 'gave feedback') : 'finished the call';
-  note([call.requestedBy], { title: `${call.scriptName || 'AI call'}: ${who} ${result}`, body: call.summary || '', link: `/sales?tab=ai&call=${call._id}` });
+  const link = call.list ? `/crm?section=${call.kind === 'INTERVIEW' ? 'interview' : 'customers'}&list=${call.list}` : `/sales?tab=ai&call=${call._id}`;
+  note([call.requestedBy], { title: `${call.scriptName || 'AI call'}: ${who} ${result}`, body: call.summary || '', link });
+}
+
+/** Interview / feedback call to someone on a CRM list: update where they stand on the list. */
+async function reportListContact(call) {
+  const spoke = (call.transcript || []).some((m) => m.role === 'user');
+  const at = call.appointmentAt ? ` (${call.appointmentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })})` : '';
+  let status = call.status === 'FAILED' || !spoke ? 'NO_ANSWER' : 'CALLED';
+  if (spoke && call.kind === 'INTERVIEW') status = call.accepted === true ? 'CONFIRMED' : call.accepted === false ? (call.appointmentAt ? 'RESCHEDULE' : 'DECLINED') : 'CALLED';
+  if (spoke && call.kind === 'FEEDBACK') status = call.callbackRequested || (call.rating && call.rating <= 2) ? 'COMPLAINT' : 'DONE';
+  const set = { 'contacts.$.status': status, 'contacts.$.lastCallAt': call.endedAt || new Date() };
+  if (spoke && call.summary) set['contacts.$.note'] = `${call.summary}${at}`.slice(0, 1000);
+  if (call.rating) set['contacts.$.rating'] = call.rating;
+  await M.ContactList.updateOne({ _id: call.list, 'contacts._id': call.contact }, { $set: set });
+  await M.StaffCall.updateMany({ aiCall: call._id }, { $set: { status: call.status === 'FAILED' ? 'FAILED' : spoke ? 'COMPLETED' : 'NO_ANSWER',
+    reason: spoke ? (call.summary || '').slice(0, 1000) : '', durationSec: call.durationSec } });
 }
 
 /** Attendance calls to employees: save what they said on the StaffCall and tell whoever asked. */
@@ -384,6 +418,7 @@ async function applyToLead(call) {
   await M.LeadActivity.create(act);
   if (!call.lead) await M.AiCall.updateOne({ _id: call._id }, { $set: { lead: lead._id } });
 
+  if (status === 'INTERESTED') sendBrochure(lead._id); // WhatsApp brochure, if switched on (once per lead)
   if (followUpAt || status === 'INTERESTED') {
     // Tell whoever owns the lead, or every sales manager when nobody does.
     const to = lead.assignedTo ? [lead.assignedTo] : (await salesTeam()).filter((u) => u.sales === 'MANAGER').map((u) => u._id);

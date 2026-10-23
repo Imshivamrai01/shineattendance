@@ -1,10 +1,13 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
-// A call to an employee from the people pages (usually "you didn't come in today, why?"): either the AI agent
-// rings them (aiCall), or the office line rings the caller's own phone first and then the employee (bridge).
+// A call from the CRM to an employee (usually "you didn't come in today, why?") or to someone on a CRM list
+// (interview candidate, customer): either the AI agent rings them (aiCall), or the office line rings the caller's
+// own phone first and then them (bridge).
 const S = new Schema({
-  employee: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  section: { type: String, enum: ['EMPLOYEE', 'INTERVIEW', 'FEEDBACK'], default: 'EMPLOYEE', index: true },
+  employee: { type: Schema.Types.ObjectId, ref: 'User', index: true },
+  list: { type: Schema.Types.ObjectId, ref: 'ContactList', index: true }, contact: Schema.Types.ObjectId, contactName: String,
   by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   date: { type: String, index: true }, // YYYY-MM-DD (India) the call is about
   mode: { type: String, enum: ['AI', 'OFFICE'], required: true },

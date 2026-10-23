@@ -5,7 +5,7 @@ import { audit } from '@/lib/audit';
 import { normalizePhone, sendTemplate, waConfigured } from '@/lib/whatsapp';
 
 const MAX = 25; // per request; the page sends a long list in chunks so progress is visible
-const PURPOSES = ['INTERVIEW', 'WELCOME', 'BULK', 'OFFER', 'SALES', 'FEEDBACK'];
+const PURPOSES = ['INTERVIEW', 'WELCOME', 'BULK', 'OFFER', 'SALES', 'FEEDBACK', 'TASK', 'ABSENT', 'BROCHURE'];
 
 // Send one approved template to up to 25 people. Each recipient carries the final values for the template's variables.
 export const POST = handler(async (ctx) => {
@@ -38,6 +38,9 @@ export const POST = handler(async (ctx) => {
     if (!to) { results.push(await M.WaMessage.create({ ...log, status: 'FAILED', error: 'Not a valid mobile number' })); continue; }
     try {
       results.push(await M.WaMessage.create({ ...log, status: 'SENT', waId: await sendTemplate(s, { to, template, language, params, header, buttonParams }) }));
+      const id = (v) => (/^[a-f\d]{24}$/i.test(v || '') ? v : null);
+      if (id(r.listId) && id(r.contactId)) await M.ContactList.updateOne({ _id: r.listId, 'contacts._id': r.contactId }, { $set: { 'contacts.$.lastMessageAt': new Date() } });
+      if (id(r.leadId)) await M.LeadActivity.create({ lead: r.leadId, type: 'NOTE', by: ctx.user._id, note: `WhatsApp "${template}" sent${mediaName ? ` with ${mediaName}` : ''}.` });
     } catch (e) {
       results.push(await M.WaMessage.create({ ...log, status: 'FAILED', error: String(e.message).slice(0, 300) }));
     }

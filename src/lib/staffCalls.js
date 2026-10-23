@@ -3,7 +3,7 @@ import { M } from './db.js';
 import { handler, HttpError, bad, forbidden, notFound } from './http.js';
 import { dateKey } from './dates.js';
 import { canManage, loadVisibleUser } from './users.js';
-import { dialable, requestDial, aiScripts, aiConfigured } from './aiCalls.js';
+import { dialable, requestDial, aiScripts, aiConfigured, queueContacts } from './aiCalls.js';
 import { officeLine, voiceFetch, callerPhone } from './officeCalls.js';
 
 /*
@@ -52,17 +52,47 @@ export async function startStaffAiCall(ctx, { purpose = '' } = {}) {
 
 /** Office line: ring the caller's phone, then the employee. */
 export async function startStaffOfficeCall(ctx) {
+  const { user, phone } = await loadCallee(ctx);
+  return startOfficeCall(ctx, { section: 'EMPLOYEE', employee: user._id, name: user.name, phone });
+}
+
+/**
+ * Several employees at once from the CRM: each goes on the AI call list (one call at a time, calling hours only)
+ * with the "Attendance check" call type. Returns { queued, skipped }.
+ */
+export async function queueStaffAiCalls(ctx, userIds, { purpose = '' } = {}) {
+  if (!aiConfigured()) throw new HttpError(503, 'The AI calling agent is not connected');
+  const script = (await aiScripts()).find((x) => x.kind === 'ATTENDANCE');
+  if (!script) throw bad('The "Attendance check" call type is switched off. Turn it on under CRM → Settings → AI agent.');
+  const ids = [...new Set((userIds || []).map(String))].filter((id) => mongoose.isValidObjectId(id)).slice(0, 200);
+  const users = (await M.User.find({ _id: { $in: ids }, status: 'ACTIVE' })).filter((u) => String(u._id) !== String(ctx.user._id) && canManage(ctx.user, u));
+  const skipped = users.length < ids.length ? [{ name: `${ids.length - users.length} person(s)`, reason: 'not someone you manage' }] : [];
+  const why = purposeFor(String(purpose).trim());
+  const contacts = users.map((u) => ({ name: u.name, phone: dialable(u.mobile) || dialable(u.callMobile) || u.mobile || '', employee: u._id }));
+  if (!contacts.length) return { queued: 0, skipped };
+  const r = await queueContacts(ctx, contacts, { purpose: why, scriptId: script._id, kind: 'ATTENDANCE' });
+  await M.StaffCall.insertMany(r.calls.map((c) => ({ section: 'EMPLOYEE', employee: c.employee, by: ctx.user._id, date: dateKey(), mode: 'AI', phone: c.phone, purpose: why, aiCall: c._id })));
+  return { queued: r.queued, skipped: [...skipped, ...r.skipped] };
+}
+
+/**
+ * Office line to anyone: ring the caller's phone, then `target` = { section, name, phone, employee? , list?, contact? }.
+ * Recorded and summarised; the StaffCall follows the call (ingestStaffBridgeEvent).
+ */
+export async function startOfficeCall(ctx, target) {
   const line = await officeLine(ctx.user);
   if (!line.enabled) throw bad(line.reason);
-  const { user, phone } = await loadCallee(ctx);
+  const phone = dialable(target.phone);
+  if (!phone) throw bad(`${target.name || 'This person'} has no Indian mobile number to call`);
   const recent = { createdAt: { $gt: new Date(Date.now() - 30 * 60000) } };
   const busy = (await M.StaffCall.exists({ by: ctx.user._id, 'bridge.status': { $in: LIVE }, ...recent }))
     || (await M.LeadActivity.exists({ by: ctx.user._id, type: 'CALL', 'bridge.status': { $in: LIVE }, ...recent }));
   if (busy) throw new HttpError(409, 'You are already on an office-line call. Hang it up first.');
 
-  const sc = await M.StaffCall.create({ employee: user._id, by: ctx.user._id, date: dateKey(), mode: 'OFFICE', phone, bridge: { status: 'CALLING_AGENT' } });
+  const sc = await M.StaffCall.create({ section: target.section, employee: target.employee, list: target.list, contact: target.contact, contactName: target.name,
+    by: ctx.user._id, date: dateKey(), mode: 'OFFICE', phone, bridge: { status: 'CALLING_AGENT' } });
   const res = await voiceFetch('/api/bridge', {
-    activityId: String(sc._id), agent: { id: String(ctx.user._id), name: ctx.user.name, phone: callerPhone(ctx.user) }, lead: { id: String(user._id), name: user.name, phone },
+    activityId: String(sc._id), agent: { id: String(ctx.user._id), name: ctx.user.name, phone: callerPhone(ctx.user) }, lead: { id: String(target.employee || target.contact || sc._id), name: target.name || '', phone },
   }).catch((e) => ({ ok: false, json: async () => ({ error: e.message }) }));
   const out = await res.json().catch(() => ({}));
   if (!res.ok || !out.callId) {
@@ -124,5 +154,17 @@ export async function ingestStaffBridgeEvent(ev) {
   } else return sc;
   sc.markModified('bridge');
   await sc.save();
+  if (sc.list && sc.contact) await syncContact(sc);
   return sc;
+}
+
+/** An office-line call to someone on a CRM list moves them on the list: called / no answer, and what they said. */
+export async function syncContact(sc) {
+  const set = { 'contacts.$.lastCallAt': sc.createdAt };
+  const c = (await M.ContactList.findOne({ _id: sc.list, 'contacts._id': sc.contact }, { 'contacts.$': 1 }).lean())?.contacts?.[0];
+  if (!c) return;
+  if (['NO_ANSWER', 'FAILED'].includes(sc.status) && sc.bridge?.status !== 'AGENT_NO_ANSWER' && ['NEW', 'NO_ANSWER'].includes(c.status)) set['contacts.$.status'] = 'NO_ANSWER';
+  if (sc.status === 'COMPLETED' && ['NEW', 'NO_ANSWER'].includes(c.status)) set['contacts.$.status'] = 'CALLED';
+  if (sc.reason) set['contacts.$.note'] = sc.reason;
+  await M.ContactList.updateOne({ _id: sc.list, 'contacts._id': sc.contact }, { $set: set });
 }

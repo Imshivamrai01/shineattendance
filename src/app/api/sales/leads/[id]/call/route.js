@@ -2,6 +2,7 @@ import { M } from '@/lib/db';
 import { readJson, bad, notFound, forbidden, oid } from '@/lib/http';
 import { salesHandler, canSeeLead, applyCallOutcome, rescore, CALL_OUTCOMES, PENDING } from '@/lib/sales';
 import { LEAD_STATUSES } from '@/models/Lead';
+import { sendBrochure } from '@/lib/waAuto';
 
 async function load(ctx) {
   const lead = await M.Lead.findById(oid(ctx.params.id, 'lead'));
@@ -53,5 +54,6 @@ export const PATCH = salesHandler(async (ctx) => {
   if (newer) { lead.lastOutcome = (await M.LeadActivity.findOne({ lead: lead._id, type: 'CALL' }).sort({ createdAt: -1 }).lean())?.outcome; rescore(lead); }
   await lead.save();
   await act.save();
+  if (lead.status === 'INTERESTED') sendBrochure(lead._id); // WhatsApp brochure, if switched on (once per lead)
   return { ok: true, lead: lead.toObject(), activity: act.toObject() };
 });

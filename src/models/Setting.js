@@ -15,6 +15,9 @@ const S = new mongoose.Schema({
   waAppId: String, waTemplateMeta: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Meta webhook: the verify token typed into Meta's Callback URL form, and the app secret that signs each delivery (optional)
   waVerifyToken: String, waAppSecret: String,
+  // WhatsApp sent on their own (lib/waAuto.js): { brochure: { on, template, language, mediaId, services }, task: { on, template, language },
+  // absent: { on, template, language, afterMin } }. waAbsentSentDate = the day the absent messages already went out.
+  waAuto: { type: mongoose.Schema.Types.Mixed, default: {} }, waAbsentSentDate: String,
   // Google Places API key for the Sales lead finder (OpenStreetMap is used without it). Never sent to the browser.
   placesKey: String,
   // What the AI calling agent knows about the company (services, timings, address, FAQs). Used on every AI call.

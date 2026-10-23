@@ -22,6 +22,7 @@ import '../models/ScrapeJob.js';
 import '../models/AiCall.js';
 import '../models/AiScript.js';
 import '../models/StaffCall.js';
+import '../models/ContactList.js';
 
 const g = globalThis;
 g.__mongo ||= { conn: null, promise: null };
@@ -135,6 +136,7 @@ export const M = {
   get AiCall() { return model('AiCall'); },
   get AiScript() { return model('AiScript'); },
   get StaffCall() { return model('StaffCall'); },
+  get ContactList() { return model('ContactList'); },
 };
 
 export async function getSettings() {

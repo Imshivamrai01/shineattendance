@@ -1,5 +1,5 @@
 import { readJson } from '@/lib/http';
-import { staffHandler, loadStaffCall } from '@/lib/staffCalls';
+import { staffHandler, loadStaffCall, syncContact } from '@/lib/staffCalls';
 
 // One call to an employee: live office-line status while it runs, then what was said.
 export const GET = staffHandler(async (ctx) => ({ call: (await loadStaffCall(ctx)).toObject() }));
@@ -11,5 +11,6 @@ export const PATCH = staffHandler(async (ctx) => {
   if (b.reason != null) sc.reason = String(b.reason).trim().slice(0, 1000);
   if (b.note != null) sc.note = String(b.note).trim().slice(0, 2000);
   await sc.save();
+  if (sc.list && sc.contact) await syncContact(sc);
   return { call: sc.toObject() };
 });

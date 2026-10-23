@@ -4,6 +4,7 @@ import { taskLabel, taskPoints, taskScore } from './taskScore.js';
 import { checkText, sessionCodes } from './presence.js';
 import { dateKey } from './dates.js';
 import { awayMs, dayFlags, hoursCfg, label12, minutesText, workedHours } from './hours.js';
+import { sendTaskWhatsApp } from './waAuto.js';
 
 /*
  * Who gets which email (role-wise):
@@ -321,8 +322,9 @@ export function notifyProfileChanged({ userId, actor, fields, reason }) {
   });
 }
 
-/** A task was assigned: tell the assignee in the app and by email. */
+/** A task was assigned: tell the assignee in the app, by email, and on WhatsApp when that is switched on. */
 export function notifyTaskAssigned(taskId) {
+  sendTaskWhatsApp(taskId);
   defer(async () => {
     const t = await M.Task.findById(taskId).populate('assignedBy', 'name role').lean();
     if (t) note(t.user, { title: 'New task assigned', body: `${t.title} (for ${dayLabel(t.date)}), from ${t.assignedBy?.name || 'your HR'}.`, link: '/tasks' });

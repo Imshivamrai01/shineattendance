@@ -20,6 +20,7 @@ const S = new Schema({
   sourceId: { type: String, index: true, sparse: true }, // Google place id / OSM element id
   nameKey: { type: String, index: true }, // normalised name + rough position (dedupe key for leads without a phone)
   status: { type: String, enum: LEAD_STATUSES, default: 'NEW', index: true },
+  brochureSentAt: Date, // the brochure went out on WhatsApp automatically after a call (once per lead)
   // Lead quality, recomputed on every change (lib/sales.js scoreLead)
   score: { type: Number, default: 0 }, grade: { type: String, enum: ['HOT', 'WARM', 'COLD'], default: 'COLD', index: true }, scoreNotes: [String],
   assignedTo: { type: Schema.Types.ObjectId, ref: 'User', index: true },
