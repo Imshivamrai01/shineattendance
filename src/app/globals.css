@@ -914,3 +914,5 @@ label.btn.disabled { opacity: .6; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .crm-section, .crm-channel, .switch span[aria-hidden], .switch span[aria-hidden]::after { transition: none; } }
 .crm-subhead { margin-bottom: 14px; }
 .crm-subhead h2 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+.crm-channel:not(.on) .crm-count { background: var(--brand-soft); color: var(--brand); }
+.crm-count.hot { background: var(--bad); color: #fff; }

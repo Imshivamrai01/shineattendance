@@ -12,7 +12,10 @@ import { AiPortal } from '@/components/AiPortal';
 import WaComposer from './WaComposer';
 import History from './History';
 
-const TABS = [['overview', 'Dashboard'], ['leads', 'Leads'], ['followups', 'Follow-ups'], ['calls', 'Call log'], ['ai', 'AI calls'], ['whatsapp', 'WhatsApp'], ['finder', 'Lead finder'], ['team', 'Team'], ['history', 'History']];
+const TABS = [['overview', 'Overview'], ['finder', 'Lead finder'], ['team', 'Team'], ['leads', 'Leads'], ['followups', 'Follow-ups'], ['calls', 'Call log'], ['ai', 'AI calls'], ['whatsapp', 'WhatsApp'], ['history', 'History']];
+// The same buttons as the other CRM sections (IVR Call, AI Call, WhatsApp, History), plus the sales Dashboard; each holds its tabs.
+const GROUPS = [['dashboard', 'Dashboard', 'home', ['overview', 'finder', 'team']], ['ivr', 'IVR Call', 'phone', ['leads', 'followups', 'calls']],
+  ['ai', 'AI Call', 'spark', ['ai']], ['whatsapp', 'WhatsApp', 'whatsapp', ['whatsapp']], ['history', 'History', 'clock', ['history']]];
 const todayIst = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
 const dueTone = (d) => { if (!d) return ''; const t = new Date(d); const now = new Date(); return t < now ? (t.toDateString() === now.toDateString() ? 'warn' : 'bad') : ''; };
@@ -509,6 +512,10 @@ export default function SalesHub({ crm, loadCrm }) {
   const tabs = TABS.filter(([k]) => (k !== 'team' || manager) && (!['whatsapp', 'history'].includes(k) || crm));
 
   const count = { followups: d.counts.dueToday + d.counts.overdue, ai: d.aiCallbacks, leads: d.counts.total };
+  const groups = GROUPS.filter(([, , , keys]) => keys.some((k) => tabs.some(([t]) => t === k)));
+  const group = groups.find(([, , , keys]) => keys.includes(tab)) || groups[0];
+  const groupTabs = tabs.filter(([k]) => group[3].includes(k));
+  const gcount = { ivr: count.followups, ai: count.ai };
 
   return (
     <>
@@ -524,12 +531,21 @@ export default function SalesHub({ crm, loadCrm }) {
       </header>
       <PendingCalls pending={d.myPending} />
       {note && <div className="alert ok">{note}</div>}
-      <nav className="seg-tabs" aria-label="Sales sections">
-        {tabs.map(([k, label]) => (
-          <button key={k} className={tab === k ? 'on' : ''} aria-current={tab === k ? 'page' : undefined} onClick={() => { setPreset({}); show(k); }}>
-            {label}{count[k] > 0 && <span className={`tab-n ${k === 'followups' && d.counts.overdue ? 'hot' : ''}`}>{count[k]}</span>}
+      <div className="crm-channels" role="tablist" aria-label="Sales">
+        {groups.map(([g, label, icon, keys]) => (
+          <button key={g} type="button" role="tab" aria-selected={group[0] === g} className={`crm-channel ${group[0] === g ? 'on' : ''}`}
+            onClick={() => { setPreset({}); if (group[0] !== g) show(keys[0]); }}>
+            <Icon name={icon} size={16} /><span>{label}</span>{gcount[g] > 0 && <span className={`crm-count ${g === 'ivr' && d.counts.overdue ? 'hot' : ''}`}>{gcount[g]}</span>}
           </button>))}
-      </nav>
+      </div>
+      {groupTabs.length > 1 && (
+        <div className="crm-subtabs">
+          {groupTabs.map(([k, label]) => (
+            <button key={k} type="button" className={tab === k ? 'on' : ''} aria-current={tab === k ? 'page' : undefined} onClick={() => { setPreset({}); show(k); }}>
+              {label}{count[k] > 0 && <span className={`tab-n ${k === 'followups' && d.counts.overdue ? 'hot' : ''}`}>{count[k]}</span>}
+            </button>))}
+        </div>
+      )}
 
       {tab === 'overview' && <Overview d={d} go={go} />}
       {tab === 'calls' && <CallLog d={d} preset={preset} />}
