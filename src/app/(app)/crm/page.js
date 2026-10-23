@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, fmtDateTime } from '@/lib/client';
 import { Badge, Field, Skeleton } from '@/components/ui';
 import { CrmAiCalls } from '@/components/AiPortal';
+import Logo from '@/components/Logo';
 import { TemplatesTab, WaPreview, MediaLibrary, MEDIA_KIND } from '@/components/WaTemplates';
 
 const CHUNK = 20;
@@ -160,7 +161,15 @@ export default function Crm() {
       {d.account && (
         <div className="card">
           <div className="row between">
-            <div><b>{d.account.name}</b> · {d.account.number}<div className="muted small">Connected sender{d.account.tier ? ` · limit ${d.account.tier.replace('TIER_', '')} new chats / day` : ''}</div></div>
+            <div className="row" style={{ gap: 12, minWidth: 0 }}>
+              <Logo size={44} />
+              <div style={{ minWidth: 0 }}>
+                <b>Shine Infosolutions</b> · {d.account.number}
+                <div className="muted small">Connected sender{d.account.tier ? ` · limit ${d.account.tier.replace('TIER_', '')} new chats / day` : ''}</div>
+                {/* What recipients see in WhatsApp is the display name approved by Meta, which can differ from the company name. */}
+                {d.account.name && d.account.name !== 'Shine Infosolutions' && <div className="muted small">Name on WhatsApp: {d.account.name} (change it in Meta WhatsApp Manager)</div>}
+              </div>
+            </div>
             <Badge tone={d.account.test ? 'warn' : 'ok'}>{d.account.test ? 'Test number' : 'Live'}</Badge>
           </div>
           {d.account.test && <div className="alert warn" style={{ marginTop: 10, marginBottom: 0 }}>This is Meta&apos;s test number: it can only message the (up to 5) numbers you added as test recipients in the Meta dashboard. Connect your real business number to message everyone.</div>}
